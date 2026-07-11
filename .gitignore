@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Transient job data
+server/uploads/*
+!server/uploads/.gitkeep
+
+# Rendered videos
+server/output/*
+!server/output/.gitkeep
+
+# Self-test assets
+server/test-assets/
+
+# Downloaded music cache
+server/cache/
+
+# Client build
+client/dist/
+
+# Misc
+*.log
+.DS_Store
