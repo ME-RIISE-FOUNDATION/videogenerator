@@ -101,6 +101,25 @@ const LAYOUTS = {
   landscape: { width: 1920, height: 1080 },
 };
 
+/**
+ * Named color-grade chains applied after the xfade chain (auto-mode looks).
+ * Each is a list of filter steps, joined into the post-processing chain.
+ */
+const LOOKS = {
+  // Punchy social-media pop: more contrast and saturation, slightly lifted.
+  vibrant: ['eq=contrast=1.08:saturation=1.22:brightness=0.02'],
+  // Film look: crushed a touch, desaturated, teal shadows / orange highlights.
+  cinema: [
+    'eq=contrast=1.12:saturation=0.95',
+    'colorbalance=rs=-0.05:gs=-0.02:bs=0.06:rh=0.05:gh=0.01:bh=-0.05',
+  ],
+  // Golden-hour warmth: gentle contrast, warm shadows and highlights.
+  warm: [
+    'eq=contrast=1.05:saturation=1.08:brightness=0.01',
+    'colorbalance=rs=0.05:gs=0.01:bs=-0.05:rh=0.03:bh=-0.03',
+  ],
+};
+
 /** Per-OS candidate font files for the drawtext title slide. */
 const FONT_CANDIDATES = {
   win32: [
@@ -240,11 +259,18 @@ export function listMusicTracks(audioDir) {
  * @param {string}   options.title       Optional title; non-empty prepends a 3s drawtext slide.
  * @param {object}   [options.style]     Professional "auto mode" styling, all off by default:
  *   {boolean} kenBurns        — photos get cover-crop + slow zoompan motion instead of static pad.
+ *   {boolean} kenBurnsPan     — adds lateral pan variants (L→R / R→L) to the photo-motion pool.
  *   {boolean} blurFill        — videos sit on a blurred scaled copy of themselves instead of black bars.
  *   {number}  maxClipSeconds  — cap each video at this length, trimming to its MIDDLE segment.
  *   {string[]} transitionPool — override the transition pool (weight by repetition).
+ *   {number}  transitionDuration — override the 0.5s xfade length (still clamped vs. shortest item).
+ *   {string}  look            — named color grade: 'vibrant' | 'cinema' | 'warm' (supersedes colorPolish).
+ *   {boolean} sharpen         — mild unsharp crispness pass.
+ *   {boolean} vignette        — subtle darkened corners.
+ *   {boolean} grain           — subtle animated film grain.
+ *   {boolean} letterbox       — cinematic black bars (12% of height each side landscape, 7% portrait).
  *   {boolean} edgeFades       — 0.5s fade-in from black and 1s fade-out to black on the final video.
- *   {boolean} colorPolish     — subtle eq grade (contrast 1.05, saturation 1.12) on the final video.
+ *   {boolean} colorPolish     — legacy subtle eq grade; ignored when `look` is set.
  *   {boolean} musicFadeIn     — 1s afade-in on the background music.
  * @param {string}   options.outputDir   Directory for the rendered mp4 (must exist).
  * @param {string}   [options.musicPath] Pre-resolved background track (e.g. from
@@ -276,12 +302,19 @@ export async function processJob(options) {
   } = options;
 
   const kenBurns = Boolean(style.kenBurns);
+  const kenBurnsPan = Boolean(style.kenBurnsPan);
   const blurFill = Boolean(style.blurFill);
   const maxClipSeconds = style.maxClipSeconds > 0 ? style.maxClipSeconds : null;
   const transitionPool =
     Array.isArray(style.transitionPool) && style.transitionPool.length > 0
       ? style.transitionPool
       : TRANSITIONS;
+  const baseTransition = style.transitionDuration > 0 ? style.transitionDuration : TRANSITION_DURATION;
+  const look = typeof style.look === 'string' && LOOKS[style.look] ? style.look : null;
+  const sharpen = Boolean(style.sharpen);
+  const vignetteFx = Boolean(style.vignette);
+  const grainFx = Boolean(style.grain);
+  const letterbox = Boolean(style.letterbox);
   const edgeFades = Boolean(style.edgeFades);
   const colorPolish = Boolean(style.colorPolish);
   const musicFadeIn = Boolean(style.musicFadeIn);
@@ -356,8 +389,8 @@ export async function processJob(options) {
   // shortest item so xfade/acrossfade can never be asked to overlap more media
   // than an item actually has (both filters hard-fail in that case).
   const minDuration = Math.min(...items.map((i) => i.duration));
-  const T = items.length > 1 ? Math.min(TRANSITION_DURATION, Math.max(0.1, minDuration / 2 - 0.05)) : 0;
-  if (items.length > 1 && T < TRANSITION_DURATION) {
+  const T = items.length > 1 ? Math.min(baseTransition, Math.max(0.1, minDuration / 2 - 0.05)) : 0;
+  if (items.length > 1 && T < baseTransition) {
     warn(`Transition length reduced to ${T.toFixed(2)}s because the shortest item is only ${minDuration.toFixed(2)}s.`);
   }
 
@@ -421,14 +454,23 @@ export async function processJob(options) {
       // (random in/out per photo). The single input frame is duplicated into
       // d = duration×fps output frames, so the item is still exactly 3s.
       const frames = Math.round(item.duration * FPS);
-      const zoomExpr =
-        Math.random() < 0.5
-          ? `'min(zoom+0.0012,1.15)'` // slow push in
-          : `'if(lte(on,1),1.15,max(zoom-0.0012,1.001))'`; // start tight, pull out
+      const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+      // Motion pool: slow push-in, pull-out, and (when kenBurnsPan) lateral
+      // pans at a fixed 1.15 zoom driven by the output frame number `on`.
+      const motions = [
+        `z='min(zoom+0.0012,1.15)':${centered}`,
+        `z='if(lte(on,1),1.15,max(zoom-0.0012,1.001))':${centered}`,
+      ];
+      if (kenBurnsPan) {
+        motions.push(
+          `z='1.15':x='(iw-iw/zoom)*on/${frames - 1}':y='ih/2-(ih/zoom/2)'`,
+          `z='1.15':x='(iw-iw/zoom)*(1-on/${frames - 1})':y='ih/2-(ih/zoom/2)'`
+        );
+      }
       filters.push(
         `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,` +
         `crop=${W * 2}:${H * 2},` +
-        `zoompan=z=${zoomExpr}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+        `zoompan=${pickRandom(motions)}` +
         `:d=${frames}:s=${W}x${H}:fps=${FPS},setsar=1,format=yuv420p[v${i}]`
       );
       return;
@@ -477,15 +519,34 @@ export async function processJob(options) {
   // accumulated stream ends. Implemented incrementally: `timeline` holds the
   // accumulated (post-overlap) duration; each boundary fires at timeline − T,
   // then timeline grows by (next item duration − T).
-  // Post-chain polish (auto mode): edge fades and a subtle color grade sit
-  // between the xfade chain's output and [vout].
+  // Post-chain polish (auto mode) between the xfade chain's output and
+  // [vout]. Order matters: grade → sharpen → vignette → grain → letterbox
+  // bars → edge fades LAST (so the fade covers the bars too).
   const postOps = [];
+  if (look) {
+    postOps.push(...LOOKS[look]);
+  } else if (colorPolish) {
+    postOps.push('eq=contrast=1.05:saturation=1.12');
+  }
+  if (sharpen) {
+    postOps.push('unsharp=5:5:0.6:5:5:0.0');
+  }
+  if (vignetteFx) {
+    postOps.push('vignette=angle=PI/6');
+  }
+  if (grainFx) {
+    postOps.push('noise=alls=5:allf=t');
+  }
+  if (letterbox) {
+    // 2.39:1-style bars: 12% of frame height per side on landscape, a
+    // lighter 7% on portrait (which is taller than any film ratio anyway).
+    const barH = Math.round(H * (W > H ? 0.12 : 0.07));
+    postOps.push(`drawbox=x=0:y=0:w=${W}:h=${barH}:color=black:t=fill`);
+    postOps.push(`drawbox=x=0:y=${H - barH}:w=${W}:h=${barH}:color=black:t=fill`);
+  }
   if (edgeFades) {
     postOps.push('fade=t=in:st=0:d=0.5');
     postOps.push(`fade=t=out:st=${Math.max(0, totalDuration - 1).toFixed(3)}:d=1`);
-  }
-  if (colorPolish) {
-    postOps.push('eq=contrast=1.05:saturation=1.12');
   }
   const chainOut = postOps.length > 0 ? 'vchain' : 'vout';
 

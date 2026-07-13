@@ -9,19 +9,19 @@ const VIBES = [
     value: 'dynamic',
     label: 'Dynamic',
     emoji: '⚡',
-    hint: 'Fast pacing (4s clips), upbeat energetic music',
+    hint: 'Punchy 0.35s cuts (slides & zooms), vivid color, crisp detail, energetic music — 4s clips',
   },
   {
     value: 'cinematic',
     label: 'Cinematic',
     emoji: '🎬',
-    hint: 'Longer takes (6s clips), orchestral score',
+    hint: 'Teal-orange film grade, grain + letterbox bars, slow dissolves, orchestral score — 6s takes',
   },
   {
     value: 'chill',
     label: 'Chill',
     emoji: '🌊',
-    hint: 'Relaxed pacing (5s clips), calm acoustic music',
+    hint: 'Warm golden tones, soft dissolves, relaxed pacing, calm acoustic music — 5s clips',
   },
 ];
 

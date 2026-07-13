@@ -39,26 +39,54 @@ const VALID_LAYOUTS = new Set(['portrait', 'landscape']);
 const VALID_AUDIO_MODES = new Set(['mute', 'merge']);
 
 /**
- * Auto-mode vibe presets: the only knob on the Auto Generator page. Each maps
- * to a music search and a per-clip pacing cap.
+ * Auto-mode vibe presets: the only knob on the Auto Generator page. Each vibe
+ * is a full editorial identity — music, pacing, transition set & speed, and a
+ * named color look (see videoProcessor's LOOKS).
  */
 const VIBES = {
-  dynamic: { musicQuery: 'upbeat energetic instrumental', maxClipSeconds: 4 },
-  cinematic: { musicQuery: 'cinematic orchestral instrumental', maxClipSeconds: 6 },
-  chill: { musicQuery: 'calm acoustic instrumental', maxClipSeconds: 5 },
+  dynamic: {
+    musicQuery: 'upbeat energetic instrumental',
+    style: {
+      maxClipSeconds: 4,
+      transitionDuration: 0.35,
+      transitionPool: ['slideleft', 'slideright', 'zoomin', 'circleopen', 'squeezeh', 'fade'],
+      look: 'vibrant',
+      sharpen: true,
+    },
+  },
+  cinematic: {
+    musicQuery: 'cinematic orchestral instrumental',
+    style: {
+      maxClipSeconds: 6,
+      transitionDuration: 0.8,
+      transitionPool: ['fade', 'fadeblack', 'dissolve', 'fadegrays'],
+      look: 'cinema',
+      grain: true,
+      letterbox: true,
+      vignette: true,
+    },
+  },
+  chill: {
+    musicQuery: 'calm acoustic instrumental',
+    style: {
+      maxClipSeconds: 5,
+      transitionDuration: 0.6,
+      transitionPool: ['fade', 'dissolve', 'smoothup', 'smoothdown', 'hblur'],
+      look: 'warm',
+      vignette: true,
+    },
+  },
 };
 
 /**
- * Professional styling flags applied to every auto-mode render (see
- * videoProcessor's style option). Transitions are weighted by repetition —
- * mostly plain fades, the editorial default.
+ * Styling shared by every auto-mode render regardless of vibe (see
+ * videoProcessor's style option); vibe-specific fields are merged on top.
  */
 const AUTO_STYLE = {
   kenBurns: true,
+  kenBurnsPan: true,
   blurFill: true,
-  transitionPool: ['fade', 'fade', 'fade', 'fadeblack', 'smoothup', 'slideleft'],
   edgeFades: true,
-  colorPolish: true,
   musicFadeIn: true,
 };
 
@@ -320,11 +348,12 @@ async function runJob(jobId, files, config) {
       config.layout = portraitVotes > landscapeVotes ? 'portrait' : 'landscape';
       config.audioMode = 'mute';
       config.musicQuery = vibe.musicQuery;
-      style = { ...AUTO_STYLE, maxClipSeconds: vibe.maxClipSeconds };
+      style = { ...AUTO_STYLE, ...vibe.style };
       console.log(
         `[job ${jobId}] auto decisions: layout=${config.layout} ` +
         `(${portraitVotes}P/${landscapeVotes}L), vibe=${config.vibe}, ` +
-        `clip cap=${vibe.maxClipSeconds}s, music="${vibe.musicQuery}"`
+        `look=${vibe.style.look}, clip cap=${vibe.style.maxClipSeconds}s, ` +
+        `xfade=${vibe.style.transitionDuration}s, music="${vibe.musicQuery}"`
       );
     }
     // Online-first music resolution (Openverse → cache → local folder → none),

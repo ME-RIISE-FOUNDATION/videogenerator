@@ -178,21 +178,28 @@ async function main() {
     files, layout: 'portrait', audioMode: 'mute', title: '',
     audioDir: AUDIO_DIR, expectedDuration: base, expectAudio: true,
   });
-  // Auto-mode professional pipeline: Ken Burns photo, blur-fill videos, the
-  // 8s clip middle-trimmed to 5s, edge fades + color polish.
-  // Durations: photo 3 + clip 2 + capped 5 = 10 raw − 2×0.5 overlap = 9.0s.
+  // Auto-mode professional pipeline with the full effects stack: Ken Burns
+  // (incl. pan variants), blur-fill, the 8s clip middle-trimmed to 5s, cinema
+  // grade + grain + letterbox + vignette + sharpen, custom 0.4s transitions.
+  // Durations: photo 3 + clip 2 + capped 5 = 10 raw − 2×0.4 overlap = 9.2s.
   await runScenario({
     name: 'auto-style',
     files: [...files.slice(0, 2), clipLong],
     layout: 'landscape', audioMode: 'mute', title: '',
-    audioDir: AUDIO_DIR, expectedDuration: 9.0, expectAudio: true,
+    audioDir: AUDIO_DIR, expectedDuration: 9.2, expectAudio: true,
     style: {
       kenBurns: true,
+      kenBurnsPan: true,
       blurFill: true,
       maxClipSeconds: 5,
       transitionPool: ['fade'],
+      transitionDuration: 0.4,
+      look: 'cinema',
+      sharpen: true,
+      vignette: true,
+      grain: true,
+      letterbox: true,
       edgeFades: true,
-      colorPolish: true,
       musicFadeIn: true,
     },
   });
