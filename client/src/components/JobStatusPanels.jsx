@@ -23,7 +23,7 @@ export default function JobStatusPanels({ job, onRetry }) {
       {job.busy ? <ProgressBar percent={job.percent} stage={job.stage} /> : null}
 
       {job.phase === 'error' ? (
-        <div className="rounded-xl border border-red-900 bg-red-950/50 p-4">
+        <div className="animate-fade-in-up rounded-2xl border border-red-500/30 bg-red-950/40 p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
           <p className="text-sm font-semibold text-red-300">Render failed</p>
           <p className="mt-1 whitespace-pre-wrap break-words text-xs text-red-400/80">{job.errorMessage}</p>
           <button
@@ -37,7 +37,7 @@ export default function JobStatusPanels({ job, onRetry }) {
       ) : null}
 
       {job.warnings.length > 0 ? (
-        <div className="rounded-xl border border-amber-900 bg-amber-950/40 p-4">
+        <div className="animate-fade-in-up rounded-2xl border border-amber-500/25 bg-amber-950/30 p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
           <p className="text-sm font-semibold text-amber-300">Warnings</p>
           <ul className="mt-1 list-inside list-disc space-y-1 text-xs text-amber-400/90">
             {job.warnings.map((w) => (

@@ -18,7 +18,7 @@ export default function ConfigPanel({
   disabled,
 }) {
   return (
-    <section className="space-y-5 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+    <section className="glass-card space-y-5">
       <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Settings</h2>
 
       <div>

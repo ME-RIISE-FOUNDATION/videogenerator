@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const ACCEPT = '.jpg,.jpeg,.png,.mp4,.mov';
 const ALLOWED_EXTS = ['jpg', 'jpeg', 'png', 'mp4', 'mov'];
@@ -14,6 +14,7 @@ let nextId = 1;
  */
 export default function UploadQueue({ files, onChange, disabled }) {
   const inputRef = useRef(null);
+  const [dragActive, setDragActive] = useState(false);
   const filesRef = useRef(files);
   filesRef.current = files;
 
@@ -55,6 +56,7 @@ export default function UploadQueue({ files, onChange, disabled }) {
   const handleDrop = useCallback(
     (event) => {
       event.preventDefault();
+      setDragActive(false);
       if (disabled) return;
       addFiles(event.dataTransfer.files);
     },
@@ -62,7 +64,7 @@ export default function UploadQueue({ files, onChange, disabled }) {
   );
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+    <section className="glass-card">
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Upload queue</h2>
         <span className="text-xs text-zinc-500">Order below = edit order</span>
@@ -70,20 +72,32 @@ export default function UploadQueue({ files, onChange, disabled }) {
 
       <div
         onDrop={handleDrop}
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!disabled) setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
         onClick={() => !disabled && inputRef.current?.click()}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
           if ((e.key === 'Enter' || e.key === ' ') && !disabled) inputRef.current?.click();
         }}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition ${
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all duration-300 ${
           disabled
             ? 'cursor-not-allowed border-zinc-800 text-zinc-600'
-            : 'border-zinc-700 text-zinc-400 hover:border-indigo-500 hover:text-indigo-300'
+            : dragActive
+              ? 'scale-[1.015] border-indigo-400 bg-indigo-500/10 text-indigo-200 shadow-lg shadow-indigo-950/50'
+              : 'border-zinc-700 text-zinc-400 hover:border-indigo-500 hover:bg-white/[0.02] hover:text-indigo-300'
         }`}
       >
-        <svg className="mb-2 h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+        <svg
+          className={`mb-2 h-8 w-8 ${dragActive ? 'animate-bounce-soft' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -111,9 +125,10 @@ export default function UploadQueue({ files, onChange, disabled }) {
           {files.map((item, index) => (
             <li
               key={item.id}
-              className="group relative overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950"
+              style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
+              className="group relative animate-pop-in overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-950/40"
             >
-              <span className="absolute left-1.5 top-1.5 z-10 flex h-6 min-w-6 items-center justify-center rounded-full bg-indigo-600 px-1.5 text-xs font-bold text-white shadow">
+              <span className="absolute left-1.5 top-1.5 z-10 flex h-6 min-w-6 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 px-1.5 text-xs font-bold text-white shadow-lg shadow-indigo-950">
                 {index + 1}
               </span>
               {!disabled ? (

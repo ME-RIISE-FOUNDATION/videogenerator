@@ -35,7 +35,7 @@ export default function AutoPage() {
       </main>
 
       <aside>
-        <section className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+        <section className="glass-card space-y-4">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Automatic mode</h2>
             <p className="mt-1 text-xs leading-relaxed text-zinc-500">
@@ -52,7 +52,9 @@ export default function AutoPage() {
           type="button"
           onClick={handleGenerate}
           disabled={files.length === 0 || job.busy}
-          className="mt-4 w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-950 transition hover:from-indigo-500 hover:to-violet-500 disabled:cursor-not-allowed disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+          className={`mt-4 w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-950 transition-all duration-300 hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:shadow-none ${
+            files.length > 0 && !job.busy ? 'animate-glow-pulse' : ''
+          }`}
         >
           {job.busy ? 'Working…' : `✨ Auto-generate video${files.length ? ` (${files.length} item${files.length > 1 ? 's' : ''})` : ''}`}
         </button>

@@ -18,7 +18,7 @@ export default function RecentVideos({ refreshKey }) {
   const recent = videos.slice(0, 4);
 
   return (
-    <section className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+    <section className="glass-card mt-4">
       <div className="mb-2 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Recent videos</h2>
         <a href="#/history" className="text-xs text-indigo-400 underline-offset-2 hover:underline">
@@ -33,7 +33,10 @@ export default function RecentVideos({ refreshKey }) {
       ) : (
         <ul className="space-y-2">
           {recent.map((video) => (
-            <li key={video.jobId} className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-2">
+            <li
+              key={video.jobId}
+              className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-950/80 px-2.5 py-2 transition-all duration-200 hover:translate-x-0.5 hover:border-indigo-500/40"
+            >
               <div className="min-w-0">
                 <p className="truncate font-mono text-[11px] text-zinc-300" title={video.fileName}>
                   🎞 {video.fileName}

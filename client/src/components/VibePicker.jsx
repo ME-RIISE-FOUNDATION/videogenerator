@@ -30,10 +30,10 @@ export default function VibePicker({ vibe, onChange, disabled }) {
       {VIBES.map((option) => (
         <label
           key={option.value}
-          className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 transition ${
+          className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 transition-all duration-200 ${
             vibe === option.value
-              ? 'border-indigo-500 bg-indigo-950/40'
-              : 'border-zinc-700 bg-zinc-950 hover:border-zinc-600'
+              ? 'border-indigo-400/60 bg-indigo-950/40 shadow-lg shadow-indigo-950/40 ring-1 ring-indigo-400/30'
+              : 'border-zinc-700 bg-zinc-950/80 hover:-translate-y-0.5 hover:border-zinc-500'
           } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
         >
           <input

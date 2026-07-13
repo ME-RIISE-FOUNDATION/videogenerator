@@ -25,7 +25,7 @@ export default function HistoryPage() {
         <button
           type="button"
           onClick={refresh}
-          className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+          className="rounded-lg border border-white/10 bg-zinc-900/60 px-3 py-1.5 text-xs font-semibold text-zinc-300 backdrop-blur transition-all duration-200 hover:border-indigo-400/50 hover:text-white active:scale-95"
         >
           ↻ Refresh
         </button>
@@ -36,7 +36,7 @@ export default function HistoryPage() {
       ) : null}
 
       {!loading && !error && videos.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-800 p-10 text-center text-sm text-zinc-500">
+        <div className="animate-fade-in-up rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/30 p-10 text-center text-sm text-zinc-500 backdrop-blur">
           Nothing here yet — generate your first video in the{' '}
           <a href="#/" className="text-indigo-400 underline underline-offset-2">Studio</a> or the{' '}
           <a href="#/auto" className="text-indigo-400 underline underline-offset-2">Auto Generator</a>.
@@ -44,8 +44,12 @@ export default function HistoryPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {videos.map((video) => (
-          <article key={video.jobId} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+        {videos.map((video, index) => (
+          <article
+            key={video.jobId}
+            style={{ animationDelay: `${Math.min(index, 10) * 60}ms` }}
+            className="animate-fade-in-up overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/50 shadow-lg shadow-black/20 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/30 hover:shadow-xl hover:shadow-indigo-950/30"
+          >
             <video controls preload="metadata" src={video.url} className="aspect-video w-full bg-black" />
             <div className="space-y-2 p-3">
               <div className="flex items-baseline justify-between gap-2">

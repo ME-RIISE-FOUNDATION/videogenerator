@@ -56,7 +56,7 @@ export default function ScriptPage() {
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <main className="space-y-6">
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+        <section className="glass-card">
           <div className="mb-3 flex items-baseline justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Your script</h2>
             <span className="text-xs text-zinc-500">{script.trim() ? `${script.trim().split(/\s+/).length} words` : ''}</span>
@@ -84,7 +84,7 @@ export default function ScriptPage() {
       </main>
 
       <aside>
-        <section className="space-y-5 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+        <section className="glass-card space-y-5">
           <div>
             <span className="mb-1.5 block text-xs font-medium text-zinc-300">Vibe</span>
             <VibePicker vibe={vibe} onChange={setVibe} disabled={job.busy} />
@@ -112,10 +112,10 @@ export default function ScriptPage() {
               {VOICE_MODES.map((option) => (
                 <label
                   key={option.value}
-                  className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 transition ${
+                  className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 transition-all duration-200 ${
                     voiceMode === option.value
-                      ? 'border-indigo-500 bg-indigo-950/40'
-                      : 'border-zinc-700 bg-zinc-950 hover:border-zinc-600'
+                      ? 'border-indigo-400/60 bg-indigo-950/40 shadow-lg shadow-indigo-950/40 ring-1 ring-indigo-400/30'
+                      : 'border-zinc-700 bg-zinc-950/80 hover:-translate-y-0.5 hover:border-zinc-500'
                   } ${job.busy ? 'cursor-not-allowed opacity-50' : ''}`}
                 >
                   <input
@@ -158,7 +158,9 @@ export default function ScriptPage() {
           type="button"
           onClick={handleGenerate}
           disabled={!canGenerate}
-          className="mt-4 w-full rounded-xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-950 transition hover:from-fuchsia-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+          className={`mt-4 w-full rounded-xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-950 transition-all duration-300 hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:shadow-none ${
+            canGenerate ? 'animate-glow-pulse' : ''
+          }`}
         >
           {job.busy ? 'Working…' : '📜 Generate video from script'}
         </button>
