@@ -238,6 +238,14 @@ export function listMusicTracks(audioDir) {
  * @param {'portrait'|'landscape'} options.layout Output geometry (1080x1920 / 1920x1080).
  * @param {'mute'|'merge'} options.audioMode 'mute' = music only; 'merge' = clip audio + ducked music.
  * @param {string}   options.title       Optional title; non-empty prepends a 3s drawtext slide.
+ * @param {object}   [options.style]     Professional "auto mode" styling, all off by default:
+ *   {boolean} kenBurns        — photos get cover-crop + slow zoompan motion instead of static pad.
+ *   {boolean} blurFill        — videos sit on a blurred scaled copy of themselves instead of black bars.
+ *   {number}  maxClipSeconds  — cap each video at this length, trimming to its MIDDLE segment.
+ *   {string[]} transitionPool — override the transition pool (weight by repetition).
+ *   {boolean} edgeFades       — 0.5s fade-in from black and 1s fade-out to black on the final video.
+ *   {boolean} colorPolish     — subtle eq grade (contrast 1.05, saturation 1.12) on the final video.
+ *   {boolean} musicFadeIn     — 1s afade-in on the background music.
  * @param {string}   options.outputDir   Directory for the rendered mp4 (must exist).
  * @param {string}   [options.musicPath] Pre-resolved background track (e.g. from
  *   musicFetcher). When set, the audioDir scan is skipped entirely.
@@ -258,6 +266,7 @@ export async function processJob(options) {
     layout = 'landscape',
     audioMode = 'mute',
     title = '',
+    style = {},
     outputDir,
     musicPath: presetMusicPath = null,
     audioDir,
@@ -265,6 +274,17 @@ export async function processJob(options) {
     onProgress = () => {},
     onWarning = () => {},
   } = options;
+
+  const kenBurns = Boolean(style.kenBurns);
+  const blurFill = Boolean(style.blurFill);
+  const maxClipSeconds = style.maxClipSeconds > 0 ? style.maxClipSeconds : null;
+  const transitionPool =
+    Array.isArray(style.transitionPool) && style.transitionPool.length > 0
+      ? style.transitionPool
+      : TRANSITIONS;
+  const edgeFades = Boolean(style.edgeFades);
+  const colorPolish = Boolean(style.colorPolish);
+  const musicFadeIn = Boolean(style.musicFadeIn);
 
   const warnings = [];
   const warn = (message) => {
@@ -293,7 +313,16 @@ export async function processJob(options) {
         if (!meta.duration || meta.duration < 0.2) {
           throw new Error('no usable duration');
         }
-        items.push({ type: 'video', path: filePath, duration: meta.duration, hasAudio: meta.hasAudio });
+        // Auto pacing: cap long clips, keeping the MIDDLE window (more likely
+        // to hold the action than the first N seconds). All timeline math
+        // below uses the capped duration.
+        let duration = meta.duration;
+        let trimStart = 0;
+        if (maxClipSeconds && meta.duration > maxClipSeconds) {
+          trimStart = (meta.duration - maxClipSeconds) / 2;
+          duration = maxClipSeconds;
+        }
+        items.push({ type: 'video', path: filePath, duration, trimStart, hasAudio: meta.hasAudio });
       } catch (err) {
         warn(`Skipped unreadable video "${path.basename(filePath)}" (${err.message})`);
       }
@@ -357,8 +386,13 @@ export async function processJob(options) {
       // Synthesized black slide; already at target size and fps.
       command.input(`color=c=black:s=${W}x${H}:r=${FPS}:d=${item.duration}`).inputFormat('lavfi');
     } else if (item.type === 'image') {
-      // -loop 1 -t 3 turns the still into an exactly-3s video stream.
-      command.input(item.path).inputOptions(['-loop', '1', '-t', String(item.duration)]);
+      if (kenBurns) {
+        // Single frame in — zoompan below duplicates it into an animated clip.
+        command.input(item.path);
+      } else {
+        // -loop 1 -t 3 turns the still into an exactly-3s video stream.
+        command.input(item.path).inputOptions(['-loop', '1', '-t', String(item.duration)]);
+      }
     } else {
       command.input(item.path);
     }
@@ -382,7 +416,46 @@ export async function processJob(options) {
     `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${FPS},format=yuv420p`;
 
   items.forEach((item, i) => {
-    let chain = `[${i}:v]`;
+    if (item.type === 'image' && kenBurns) {
+      // Ken Burns: cover-crop to fill the frame (no bars), then a slow zoompan
+      // (random in/out per photo). The single input frame is duplicated into
+      // d = duration×fps output frames, so the item is still exactly 3s.
+      const frames = Math.round(item.duration * FPS);
+      const zoomExpr =
+        Math.random() < 0.5
+          ? `'min(zoom+0.0012,1.15)'` // slow push in
+          : `'if(lte(on,1),1.15,max(zoom-0.0012,1.001))'`; // start tight, pull out
+      filters.push(
+        `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,` +
+        `crop=${W * 2}:${H * 2},` +
+        `zoompan=z=${zoomExpr}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+        `:d=${frames}:s=${W}x${H}:fps=${FPS},setsar=1,format=yuv420p[v${i}]`
+      );
+      return;
+    }
+
+    // Middle-window trim for capped clips (auto pacing).
+    const trimPrefix =
+      item.type === 'video' && item.trimStart > 0
+        ? `trim=start=${item.trimStart.toFixed(3)}:duration=${item.duration.toFixed(3)},setpts=PTS-STARTPTS,`
+        : '';
+
+    if (item.type === 'video' && blurFill) {
+      // Blur-fill: aspect-mismatched clips sit on a blurred, cover-cropped
+      // copy of themselves instead of black bars.
+      filters.push(`[${i}:v]${trimPrefix}split=2[bg${i}][fg${i}]`);
+      filters.push(
+        `[bg${i}]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H},boxblur=20:2[bgb${i}]`
+      );
+      filters.push(`[fg${i}]scale=${W}:${H}:force_original_aspect_ratio=decrease[fgs${i}]`);
+      filters.push(
+        `[bgb${i}][fgs${i}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=${FPS},format=yuv420p[v${i}]`
+      );
+      return;
+    }
+
+    let chain = `[${i}:v]${trimPrefix}`;
     if (item.type === 'title' && item.textFile && item.fontFile) {
       const fontSize = Math.round(Math.min(W, H) / 12);
       chain +=
@@ -404,14 +477,26 @@ export async function processJob(options) {
   // accumulated stream ends. Implemented incrementally: `timeline` holds the
   // accumulated (post-overlap) duration; each boundary fires at timeline − T,
   // then timeline grows by (next item duration − T).
+  // Post-chain polish (auto mode): edge fades and a subtle color grade sit
+  // between the xfade chain's output and [vout].
+  const postOps = [];
+  if (edgeFades) {
+    postOps.push('fade=t=in:st=0:d=0.5');
+    postOps.push(`fade=t=out:st=${Math.max(0, totalDuration - 1).toFixed(3)}:d=1`);
+  }
+  if (colorPolish) {
+    postOps.push('eq=contrast=1.05:saturation=1.12');
+  }
+  const chainOut = postOps.length > 0 ? 'vchain' : 'vout';
+
   const chosenTransitions = [];
   let vLabel = 'v0';
   let timeline = items[0].duration;
   for (let i = 1; i < items.length; i++) {
-    const transition = pickRandom(TRANSITIONS);
+    const transition = pickRandom(transitionPool);
     chosenTransitions.push(transition);
     const offset = (timeline - T).toFixed(3);
-    const outLabel = i === items.length - 1 ? 'vout' : `vx${i}`;
+    const outLabel = i === items.length - 1 ? chainOut : `vx${i}`;
     filters.push(
       `[${vLabel}][v${i}]xfade=transition=${transition}:duration=${T}:offset=${offset}[${outLabel}]`
     );
@@ -419,7 +504,10 @@ export async function processJob(options) {
     vLabel = outLabel;
   }
   if (items.length === 1) {
-    filters.push('[v0]null[vout]');
+    filters.push(`[v0]null[${chainOut}]`);
+  }
+  if (postOps.length > 0) {
+    filters.push(`[${chainOut}]${postOps.join(',')}[vout]`);
   }
 
   // ------------------------------------------------------------ audio graph
@@ -438,8 +526,13 @@ export async function processJob(options) {
     items.forEach((item, i) => {
       const d = item.duration.toFixed(3);
       if (item.hasAudio) {
+        // Mirror the video's middle-window trim so A/V segments line up.
+        const aTrimPrefix =
+          item.trimStart > 0
+            ? `atrim=start=${item.trimStart.toFixed(3)}:duration=${d},asetpts=PTS-STARTPTS,`
+            : '';
         filters.push(
-          `[${i}:a]${audioNorm},apad,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
+          `[${i}:a]${aTrimPrefix}${audioNorm},apad,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
         );
       } else {
         filters.push(
@@ -465,7 +558,8 @@ export async function processJob(options) {
       // (older ffmpeg has no normalize=0 option), so volume=2 afterwards
       // restores clip audio to 1.0 and leaves music at the intended 0.35.
       filters.push(
-        `[${musicIndex}:a]${audioNorm},atrim=duration=${dur},asetpts=PTS-STARTPTS,volume=${MUSIC_DUCK_VOLUME}[amusic]`
+        `[${musicIndex}:a]${audioNorm},atrim=duration=${dur},asetpts=PTS-STARTPTS,` +
+        `${musicFadeIn ? 'afade=t=in:st=0:d=1,' : ''}volume=${MUSIC_DUCK_VOLUME}[amusic]`
       );
       filters.push(
         `[aclips][amusic]amix=inputs=2:duration=first:dropout_transition=3,volume=2,` +
@@ -481,6 +575,7 @@ export async function processJob(options) {
     if (musicPath) {
       filters.push(
         `[${musicIndex}:a]${audioNorm},atrim=duration=${dur},asetpts=PTS-STARTPTS,` +
+        `${musicFadeIn ? 'afade=t=in:st=0:d=1,' : ''}` +
         `afade=t=out:st=${fadeStart}:d=${AUDIO_FADE_OUT}[aout]`
       );
       hasAudioOut = true;

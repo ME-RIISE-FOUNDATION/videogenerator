@@ -43,11 +43,36 @@ cd server && npm start
 cd client && npm run dev
 ```
 
-Open http://localhost:5173, drag in photos/clips, arrange nothing — **the
-queue order is the edit order** (numbered badges) — pick a layout and audio
-mode, optionally set a music mood/genre and a title (adds a 3s title slide),
-and hit *Generate*. When rendering completes the progress bar is replaced by
-an inline player, a download button, and the music credit.
+Open http://localhost:5173. Three pages, switched by the header tabs:
+
+- **Studio** (`#/`) — full manual control: drag in photos/clips (**the queue
+  order is the edit order**, numbered badges), pick layout and audio mode,
+  optionally set a music mood/genre and a title (adds a 3s title slide), hit
+  *Generate*.
+- **✨ Auto Generator** (`#/auto`) — one-click professional mode: drop media,
+  pick a vibe (*Dynamic* / *Cinematic* / *Chill*), click once. The system
+  decides everything:
+  - layout from the majority orientation of your media;
+  - **Ken Burns motion** on photos (cover-crop + slow zoom in/out — no static
+    frames, no black bars);
+  - **blur-fill** framing for videos (mismatched clips sit on a blurred copy
+    of themselves instead of letterbox bars);
+  - **auto pacing** — long clips are trimmed to their middle segment, capped
+    per vibe (4–6s), so the reel keeps moving;
+  - curated, fade-forward transitions; 0.5s fade-in and 1s fade-out to black;
+    subtle color grade (contrast/saturation);
+  - clip audio muted; auto-fetched, never-reused music with 1s fade-in,
+    query chosen by the vibe.
+
+- **📼 History** (`#/history`) — every video you have ever generated, newest
+  first: replay inline, download, see the date/size and which music track it
+  used (joined from the used-tracks ledger), and delete ones you no longer
+  want. Deleting a video does NOT free its music track — strict no-reuse
+  stands. Both generator pages also show a compact "Recent videos" panel in
+  their sidebar with a link to the full history.
+
+When rendering completes the progress bar is replaced by an inline player, a
+download button, and the music credit.
 
 ### Background music (auto-fetched)
 

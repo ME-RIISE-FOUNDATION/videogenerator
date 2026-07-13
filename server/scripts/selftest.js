@@ -44,6 +44,7 @@ function generateAssets() {
   const photo = path.join(ASSETS_DIR, 'photo.png');
   const clipWithAudio = path.join(ASSETS_DIR, 'clip-audio.mp4');
   const clipSilent = path.join(ASSETS_DIR, 'clip-silent.mp4');
+  const clipLong = path.join(ASSETS_DIR, 'clip-long.mp4');
   const music = path.join(AUDIO_DIR, 'selftest-music.mp3');
 
   console.log('Generating test assets…');
@@ -61,6 +62,11 @@ function generateAssets() {
     '-f', 'lavfi', '-i', 'smptebars=duration=2:size=480x640:rate=25',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipSilent,
   ]);
+  // 8s silent clip — exercises the auto-mode pacing cap (middle-trimmed to 5s).
+  runFfmpeg([
+    '-f', 'lavfi', '-i', 'testsrc2=duration=8:size=640x360:rate=30',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipLong,
+  ]);
   // 4s two-tone "music" mp3 (shorter than every render, so -stream_loop is exercised).
   runFfmpeg([
     '-f', 'lavfi', '-i', 'sine=frequency=220:duration=4',
@@ -69,7 +75,7 @@ function generateAssets() {
     '-map', '[a]', '-c:a', 'libmp3lame', '-b:a', '128k', music,
   ]);
 
-  return { files: [photo, clipWithAudio, clipSilent], music };
+  return { files: [photo, clipWithAudio, clipSilent], clipLong, music };
 }
 
 /**
@@ -83,6 +89,7 @@ function generateAssets() {
  * @param {string} spec.title Title text ('' for none).
  * @param {string} spec.audioDir Music folder for this scenario.
  * @param {string} [spec.musicPath] Pre-resolved track (bypasses the audioDir scan).
+ * @param {object} [spec.style] Professional auto-mode style flags for processJob.
  * @param {number} spec.expectedDuration Expected output duration in seconds.
  * @param {boolean} spec.expectAudio Whether the output must have an audio stream.
  */
@@ -104,6 +111,7 @@ async function runScenario(spec) {
       layout: spec.layout,
       audioMode: spec.audioMode,
       title: spec.title,
+      style: spec.style || {},
       outputDir: OUTPUT_DIR,
       musicPath: spec.musicPath || null,
       audioDir: spec.audioDir,
@@ -143,7 +151,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { files, music } = generateAssets();
+  const { files, clipLong, music } = generateAssets();
 
   // Per-item durations: photo 3s + clip 2s + clip 2s = 7s raw.
   // 2 boundaries × 0.5s overlap → 6.0s. A title adds 3s − 0.5s overlap → +2.5s.
@@ -169,6 +177,24 @@ async function main() {
     name: 'portrait-mute',
     files, layout: 'portrait', audioMode: 'mute', title: '',
     audioDir: AUDIO_DIR, expectedDuration: base, expectAudio: true,
+  });
+  // Auto-mode professional pipeline: Ken Burns photo, blur-fill videos, the
+  // 8s clip middle-trimmed to 5s, edge fades + color polish.
+  // Durations: photo 3 + clip 2 + capped 5 = 10 raw − 2×0.5 overlap = 9.0s.
+  await runScenario({
+    name: 'auto-style',
+    files: [...files.slice(0, 2), clipLong],
+    layout: 'landscape', audioMode: 'mute', title: '',
+    audioDir: AUDIO_DIR, expectedDuration: 9.0, expectAudio: true,
+    style: {
+      kenBurns: true,
+      blurFill: true,
+      maxClipSeconds: 5,
+      transitionPool: ['fade'],
+      edgeFades: true,
+      colorPolish: true,
+      musicFadeIn: true,
+    },
   });
   // Empty music folder + mute mode → video-only output, with a warning, no crash.
   await runScenario({

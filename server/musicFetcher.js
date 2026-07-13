@@ -115,6 +115,17 @@ export function releaseTrackReservation(id) {
 }
 
 /**
+ * Every ledger entry (one per completed render that consumed a fetched
+ * track). Used by the history endpoint to join videos to their music.
+ *
+ * @param {string} cacheDir Cache directory holding the ledger.
+ * @returns {Array<object>} Ledger entries (empty when none).
+ */
+export function listUsedTracks(cacheDir) {
+  return loadLedger(cacheDir);
+}
+
+/**
  * Format an Openverse license pair for display, e.g. ("by", "3.0") → "CC BY 3.0".
  *
  * @param {string} license Openverse license slug (by, by-sa, cc0, pdm, …).
