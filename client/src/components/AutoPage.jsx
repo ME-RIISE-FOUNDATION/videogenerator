@@ -2,28 +2,8 @@ import { useCallback, useState } from 'react';
 import UploadQueue from './UploadQueue.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
+import VibePicker from './VibePicker.jsx';
 import useRenderJob from '../hooks/useRenderJob.js';
-
-const VIBES = [
-  {
-    value: 'dynamic',
-    label: 'Dynamic',
-    emoji: '⚡',
-    hint: 'Punchy 0.35s cuts (slides & zooms), vivid color, crisp detail, energetic music — 4s clips',
-  },
-  {
-    value: 'cinematic',
-    label: 'Cinematic',
-    emoji: '🎬',
-    hint: 'Teal-orange film grade, grain + letterbox bars, slow dissolves, orchestral score — 6s takes',
-  },
-  {
-    value: 'chill',
-    label: 'Chill',
-    emoji: '🌊',
-    hint: 'Warm golden tones, soft dissolves, relaxed pacing, calm acoustic music — 5s clips',
-  },
-];
 
 /**
  * The Auto Generator: drop media, pick a vibe, one click. The server decides
@@ -65,34 +45,7 @@ export default function AutoPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-2">
-            {VIBES.map((option) => (
-              <label
-                key={option.value}
-                className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 transition ${
-                  vibe === option.value
-                    ? 'border-indigo-500 bg-indigo-950/40'
-                    : 'border-zinc-700 bg-zinc-950 hover:border-zinc-600'
-                } ${job.busy ? 'cursor-not-allowed opacity-50' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="vibe"
-                  value={option.value}
-                  checked={vibe === option.value}
-                  disabled={job.busy}
-                  onChange={() => setVibe(option.value)}
-                  className="mt-0.5 accent-indigo-500"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-zinc-100">
-                    {option.emoji} {option.label}
-                  </span>
-                  <span className="block text-xs text-zinc-500">{option.hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
+          <VibePicker vibe={vibe} onChange={setVibe} disabled={job.busy} />
         </section>
 
         <button

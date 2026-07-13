@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import StudioPage from './components/StudioPage.jsx';
 import AutoPage from './components/AutoPage.jsx';
+import ScriptPage from './components/ScriptPage.jsx';
 import HistoryPage from './components/HistoryPage.jsx';
 
 const SUBTITLES = {
   studio: 'Upload photos and clips, pick a layout, and render a stitched highlight video — fully local.',
   auto: 'Automatic mode — drop your media, pick a vibe, get a professional edit.',
+  script: 'Write it, get it — scenes, visuals, captions, narration and music, generated from your script.',
   history: 'Every video you have generated, newest first — replay, download, or delete.',
 };
 
@@ -23,7 +25,13 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const route = hash.startsWith('#/auto') ? 'auto' : hash.startsWith('#/history') ? 'history' : 'studio';
+  const route = hash.startsWith('#/auto')
+    ? 'auto'
+    : hash.startsWith('#/script')
+      ? 'script'
+      : hash.startsWith('#/history')
+        ? 'history'
+        : 'studio';
 
   const tabClass = (active) =>
     `rounded-lg px-4 py-2 text-sm font-semibold transition ${
@@ -49,6 +57,9 @@ export default function App() {
             <a href="#/auto" className={tabClass(route === 'auto')}>
               ✨ Auto Generator
             </a>
+            <a href="#/script" className={tabClass(route === 'script')}>
+              📜 Script to Video
+            </a>
             <a href="#/history" className={tabClass(route === 'history')}>
               📼 History
             </a>
@@ -56,7 +67,15 @@ export default function App() {
         </div>
       </header>
 
-      {route === 'auto' ? <AutoPage /> : route === 'history' ? <HistoryPage /> : <StudioPage />}
+      {route === 'auto' ? (
+        <AutoPage />
+      ) : route === 'script' ? (
+        <ScriptPage />
+      ) : route === 'history' ? (
+        <HistoryPage />
+      ) : (
+        <StudioPage />
+      )}
     </div>
   );
 }

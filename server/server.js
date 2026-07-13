@@ -25,6 +25,14 @@ import { Server as SocketIOServer } from 'socket.io';
 import multer from 'multer';
 import { processJob, probeMedia, hasFilter, FFMPEG_PATH } from './videoProcessor.js';
 import { resolveMusicTrack, markTrackUsed, releaseTrackReservation, listUsedTracks } from './musicFetcher.js';
+import {
+  parseScript,
+  extractKeywords,
+  fetchSceneImage,
+  synthNarration,
+  wrapCaption,
+  readingDuration,
+} from './scriptComposer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,8 +43,19 @@ const AUDIO_DIR = path.join(__dirname, 'public', 'audio');
 const MUSIC_CACHE_DIR = path.join(__dirname, 'cache', 'music');
 
 const ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.mp4', '.mov']);
+const VOICE_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg']);
 const VALID_LAYOUTS = new Set(['portrait', 'landscape']);
 const VALID_AUDIO_MODES = new Set(['mute', 'merge']);
+const VALID_VOICE_MODES = new Set(['voice', 'tts', 'music']);
+
+/** Dark gradient pairs cycled through for scenes with no fetched image. */
+const SCENE_GRADIENTS = [
+  ['0x1b2a4a', '0x0c0f1c'],
+  ['0x3a1c47', '0x120a1e'],
+  ['0x0f3d3e', '0x071a1b'],
+  ['0x4a2c1b', '0x1c0f08'],
+  ['0x232526', '0x414345'],
+];
 
 /**
  * Auto-mode vibe presets: the only knob on the Auto Generator page. Each vibe
@@ -130,6 +149,7 @@ function broadcast(jobId, event, payload) {
       state.percent = 100;
       state.url = payload.url;
       state.attribution = payload.attribution || null;
+      state.imageCredits = payload.imageCredits || null;
     } else if (event === 'error') {
       state.status = 'error';
       state.error = payload.message;
@@ -194,6 +214,12 @@ const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
+    if (file.fieldname === 'voice') {
+      if (!VOICE_EXTS.has(ext)) {
+        return cb(new Error(`Unsupported voice file "${ext}". Allowed: .mp3 .wav .m4a .aac .ogg`));
+      }
+      return cb(null, true);
+    }
     if (!ALLOWED_EXTS.has(ext)) {
       return cb(new Error(`Unsupported file type "${ext}" (${file.originalname}). Allowed: .jpg .jpeg .png .mp4 .mov`));
     }
@@ -211,7 +237,7 @@ app.post(
   '/api/generate',
   createJobContext,
   (req, res, next) => {
-    upload.array('files')(req, res, (err) => {
+    upload.fields([{ name: 'files', maxCount: 500 }, { name: 'voice', maxCount: 1 }])(req, res, (err) => {
       if (err) {
         removeDirQuiet(req.uploadDir);
         return res.status(400).json({ error: err.message });
@@ -220,17 +246,31 @@ app.post(
     });
   },
   (req, res) => {
-    if (!req.files || req.files.length === 0) {
-      removeDirQuiet(req.uploadDir);
-      return res.status(400).json({ error: 'No files uploaded.' });
-    }
+    const mediaFiles = (req.files && req.files.files) || [];
+    const voiceFile = req.files && req.files.voice ? req.files.voice[0] : null;
 
-    const mode = req.body.mode === 'auto' ? 'auto' : 'manual';
+    const mode = req.body.mode === 'auto' ? 'auto' : req.body.mode === 'script' ? 'script' : 'manual';
     const vibe = Object.prototype.hasOwnProperty.call(VIBES, req.body.vibe) ? req.body.vibe : 'dynamic';
     const layout = VALID_LAYOUTS.has(req.body.layout) ? req.body.layout : 'landscape';
     const audioMode = VALID_AUDIO_MODES.has(req.body.audioMode) ? req.body.audioMode : 'mute';
     const title = typeof req.body.title === 'string' ? req.body.title.slice(0, 200) : '';
     const musicQuery = typeof req.body.musicQuery === 'string' ? req.body.musicQuery.slice(0, 100) : '';
+    const script = typeof req.body.script === 'string' ? req.body.script.slice(0, 8000) : '';
+    const voiceMode = VALID_VOICE_MODES.has(req.body.voiceMode) ? req.body.voiceMode : 'music';
+
+    if (mode === 'script') {
+      if (!script.trim()) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'The script is empty.' });
+      }
+      if (voiceMode === 'voice' && !voiceFile) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'Narration is set to "my voice" but no voice file was uploaded.' });
+      }
+    } else if (mediaFiles.length === 0) {
+      removeDirQuiet(req.uploadDir);
+      return res.status(400).json({ error: 'No files uploaded.' });
+    }
 
     const jobId = req.jobId;
     jobs.set(jobId, {
@@ -241,13 +281,26 @@ app.post(
       error: null,
       warnings: [],
       attribution: null,
+      imageCredits: null,
     });
 
     // Respond immediately; render asynchronously.
     res.json({ jobId });
 
-    const orderedFiles = req.files.map((f) => f.path);
-    setImmediate(() => runJob(jobId, orderedFiles, { mode, vibe, layout, audioMode, title, musicQuery }));
+    const orderedFiles = mediaFiles.map((f) => f.path);
+    setImmediate(() =>
+      runJob(jobId, orderedFiles, {
+        mode,
+        vibe,
+        layout,
+        audioMode,
+        title,
+        musicQuery,
+        script,
+        voiceMode,
+        voicePath: voiceFile ? voiceFile.path : null,
+      })
+    );
   }
 );
 
@@ -270,6 +323,15 @@ app.get('/api/history', (req, res) => {
         const stat = fs.statSync(path.join(OUTPUT_DIR, fileName));
         const jobId = fileName.slice(0, -4);
         const track = ledgerByJob.get(jobId) || null;
+        // Script-mode renders carry a credits sidecar with their CC images.
+        let imageCredits = null;
+        try {
+          const sidecar = path.join(OUTPUT_DIR, `${jobId}.credits.json`);
+          if (fs.existsSync(sidecar)) {
+            const credits = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+            if (Array.isArray(credits.images) && credits.images.length > 0) imageCredits = credits.images;
+          }
+        } catch { /* unreadable sidecar — omit credits */ }
         return {
           jobId,
           fileName,
@@ -279,6 +341,7 @@ app.get('/api/history', (req, res) => {
           attribution: track
             ? { title: track.title, creator: track.creator, license: track.license, sourceUrl: track.sourceUrl }
             : null,
+          imageCredits,
         };
       })
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -300,6 +363,7 @@ app.delete('/api/history/:jobId', (req, res) => {
   }
   try {
     fs.unlinkSync(file);
+    removeFileQuiet(path.join(OUTPUT_DIR, `${jobId}.credits.json`));
     // The music ledger is deliberately untouched: a used track stays used
     // even after its video is deleted (strict no-reuse guarantee).
     res.json({ ok: true });
@@ -356,6 +420,100 @@ async function runJob(jobId, files, config) {
         `xfade=${vibe.style.transitionDuration}s, music="${vibe.musicQuery}"`
       );
     }
+
+    // Script mode: the written script becomes scenes with fetched visuals,
+    // captions, and (optionally) narration.
+    let scenesConfig = null;
+    let voiceoverOpt = null;
+    const imageCredits = [];
+    if (config.mode === 'script') {
+      broadcast(jobId, 'progress', { percent: 0, stage: 'Writing scenes' });
+      const parsed = parseScript(config.script);
+      if (parsed.scenes.length === 0) throw new Error('The script has no usable text.');
+      if (parsed.capped) {
+        broadcast(jobId, 'warning', { message: 'Long script — trimmed to the first 20 scenes.' });
+      }
+      if (!config.title && parsed.title) config.title = parsed.title;
+
+      const vibe = VIBES[config.vibe];
+      config.audioMode = 'mute';
+      config.musicQuery = vibe.musicQuery;
+      style = { ...AUTO_STYLE, ...vibe.style };
+
+      // Narration decides scene durations.
+      let voiceMode = config.voiceMode;
+      const sceneMeta = parsed.scenes.map((s) => ({
+        ...s,
+        duration: readingDuration(s.words),
+        voPath: null,
+      }));
+      if (voiceMode === 'tts') {
+        for (let i = 0; i < sceneMeta.length; i++) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Recording narration (${i + 1}/${sceneMeta.length})` });
+          const wav = await synthNarration({
+            text: sceneMeta[i].text,
+            wavPath: path.join(uploadDir, `narration-${i}.wav`),
+            workDir: uploadDir,
+            index: i,
+          });
+          if (wav) {
+            sceneMeta[i].voPath = wav.path;
+            sceneMeta[i].duration = Math.max(3, wav.duration + 0.8);
+          } else if (i === 0) {
+            broadcast(jobId, 'warning', { message: 'Text-to-speech unavailable — continuing with music only.' });
+            voiceMode = 'music';
+            break;
+          } else {
+            broadcast(jobId, 'warning', { message: `Narration failed for scene ${i + 1} — it will be silent.` });
+          }
+        }
+        if (voiceMode === 'tts') voiceoverOpt = { mode: 'tts' };
+      } else if (voiceMode === 'voice') {
+        // One uploaded track narrates everything: distribute its length over
+        // the scenes by word-count weight (+1.5s outro), so visuals fit the voice.
+        const meta = await probeMedia(config.voicePath);
+        if (!meta.hasAudio || !meta.duration) {
+          throw new Error('The uploaded voice file is not readable audio.');
+        }
+        const totalWords = sceneMeta.reduce((sum, s) => sum + s.words, 0) || 1;
+        const tApprox = style.transitionDuration || 0.5;
+        const target = meta.duration + 1.5 + tApprox * (sceneMeta.length - 1);
+        sceneMeta.forEach((s) => {
+          s.duration = Math.max(2.5, (s.words / totalWords) * target);
+        });
+        voiceoverOpt = { mode: 'file', path: config.voicePath };
+      }
+
+      // Visuals + captions per scene.
+      const wrapChars = config.layout === 'portrait' ? 24 : 34;
+      scenesConfig = [];
+      for (let i = 0; i < sceneMeta.length; i++) {
+        broadcast(jobId, 'progress', { percent: 0, stage: `Fetching visuals (${i + 1}/${sceneMeta.length})` });
+        const image = await fetchSceneImage({
+          query: extractKeywords(sceneMeta[i].text),
+          destDir: uploadDir,
+          index: i,
+        });
+        if (image) imageCredits.push(image.attribution);
+        const captionFile = path.join(uploadDir, `caption-${i}.txt`);
+        fs.writeFileSync(captionFile, wrapCaption(sceneMeta[i].text, wrapChars), 'utf8');
+        scenesConfig.push({
+          duration: sceneMeta[i].duration,
+          imagePath: image ? image.path : null,
+          captionFile,
+          voPath: sceneMeta[i].voPath,
+          gradient: SCENE_GRADIENTS[i % SCENE_GRADIENTS.length],
+        });
+      }
+      if (imageCredits.length === 0) {
+        broadcast(jobId, 'warning', { message: 'No online images found — using animated gradient backgrounds.' });
+      }
+      console.log(
+        `[job ${jobId}] script decisions: scenes=${scenesConfig.length}, narration=${voiceMode}, ` +
+        `images=${imageCredits.length}, layout=${config.layout}, vibe=${config.vibe}` +
+        (config.title ? `, title=${JSON.stringify(config.title)}` : '')
+      );
+    }
     // Online-first music resolution (Openverse → cache → local folder → none),
     // strict no-reuse: only tracks never consumed by a finished video.
     music = await resolveMusicTrack({
@@ -375,6 +533,8 @@ async function runJob(jobId, files, config) {
     const result = await processJob({
       jobId,
       files,
+      scenes: scenesConfig,
+      voiceover: voiceoverOpt,
       layout: config.layout,
       audioMode: config.audioMode,
       title: config.title,
@@ -387,9 +547,24 @@ async function runJob(jobId, files, config) {
       onWarning: (message) => broadcast(jobId, 'warning', { message }),
     });
 
+    // Script mode: persist the CC credits next to the video so History can
+    // show them after this process forgets the job.
+    if (config.mode === 'script') {
+      try {
+        fs.writeFileSync(
+          path.join(OUTPUT_DIR, `${jobId}.credits.json`),
+          JSON.stringify({ music: music ? music.attribution : null, images: imageCredits }, null, 2),
+          'utf8'
+        );
+      } catch (err) {
+        console.warn(`[job ${jobId}] could not write credits sidecar: ${err.message}`);
+      }
+    }
+
     broadcast(jobId, 'complete', {
       url: `/output/${result.fileName}`,
       attribution: music ? music.attribution : null,
+      imageCredits: imageCredits.length > 0 ? imageCredits : null,
     });
 
     // The render consumed this track — ledger it so no future video reuses it.
@@ -430,7 +605,7 @@ io.on('connection', (socket) => {
       socket.emit('warning', { message });
     }
     if (state.status === 'complete') {
-      socket.emit('complete', { url: state.url, attribution: state.attribution });
+      socket.emit('complete', { url: state.url, attribution: state.attribution, imageCredits: state.imageCredits });
     } else if (state.status === 'error') {
       socket.emit('error', { message: state.error });
     } else {

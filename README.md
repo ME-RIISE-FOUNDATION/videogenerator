@@ -43,27 +43,42 @@ cd server && npm start
 cd client && npm run dev
 ```
 
-Open http://localhost:5173. Three pages, switched by the header tabs:
+Open http://localhost:5173. Four pages, switched by the header tabs:
 
 - **Studio** (`#/`) — full manual control: drag in photos/clips (**the queue
   order is the edit order**, numbered badges), pick layout and audio mode,
   optionally set a music mood/genre and a title (adds a 3s title slide), hit
   *Generate*.
 - **✨ Auto Generator** (`#/auto`) — one-click professional mode: drop media,
-  pick a vibe (*Dynamic* / *Cinematic* / *Chill*), click once. The system
-  decides everything:
-  - layout from the majority orientation of your media;
-  - **Ken Burns motion** on photos (cover-crop + slow zoom in/out — no static
-    frames, no black bars);
-  - **blur-fill** framing for videos (mismatched clips sit on a blurred copy
-    of themselves instead of letterbox bars);
-  - **auto pacing** — long clips are trimmed to their middle segment, capped
-    per vibe (4–6s), so the reel keeps moving;
-  - curated, fade-forward transitions; 0.5s fade-in and 1s fade-out to black;
-    subtle color grade (contrast/saturation);
-  - clip audio muted; auto-fetched, never-reused music with 1s fade-in,
-    query chosen by the vibe.
+  pick a vibe, click once. The system decides everything: layout from the
+  majority orientation of your media; **Ken Burns motion** on photos (zooms
+  AND lateral pans, cover-cropped — no static frames); **blur-fill** framing
+  for videos (no black bars); **auto pacing** (long clips middle-trimmed per
+  vibe); fade-in/out; muted clip audio with auto-fetched, never-reused music.
+  Each vibe is a full editorial identity:
+  - **⚡ Dynamic** — punchy 0.35s transitions (slides, zoom-ins, squeezes),
+    *Vibrant* grade (contrast + saturation boost), crisp `unsharp` detail,
+    4s clip cap, energetic music;
+  - **🎬 Cinematic** — slow 0.8s dissolves (fade/fadeblack/dissolve/
+    fadegrays), *Cinema* teal-orange film grade, animated film grain,
+    2.39:1-style **letterbox bars**, vignette, 6s takes, orchestral score;
+  - **🌊 Chill** — relaxed 0.6s soft transitions (dissolve, smooth, hblur),
+    *Warm* golden grade, vignette, 5s clips, calm acoustic music.
 
+- **📜 Script to Video** (`#/script`) — paste a script and get a finished
+  video. Blank-line paragraphs become scenes (short first line = title
+  slide, up to 20 scenes). For every scene the app: extracts keywords and
+  fetches a matching **CC image from Openverse** (animated gradient fallback
+  when offline), applies Ken Burns motion, and overlays a word-wrapped,
+  fade-in/out lower-third **caption**. Narration is a 3-way choice:
+  - **🎤 My voice** — upload a recording (.mp3/.wav/.m4a/.aac/.ogg); scene
+    durations are word-count-weighted so the visuals fit your narration;
+  - **🗣️ Computer voice** — the script is read aloud per scene by the
+    built-in Windows voice (System.Speech, offline, no install);
+  - **🎵 Music only** — reading-speed pacing, captions carry the script.
+  Music is always fetched (never reused) and ducked to 0.2 under narration.
+  Image credits are shown under the player, in History, and saved to
+  `output/<jobId>.credits.json`.
 - **📼 History** (`#/history`) — every video you have ever generated, newest
   first: replay inline, download, see the date/size and which music track it
   used (joined from the used-tracks ledger), and delete ones you no longer

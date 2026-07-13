@@ -1,6 +1,6 @@
 # Task: Next-level effects & editing (per-vibe looks)
 
-**Status:** Approved 2026-07-13 (auto mode only, no manual-Studio look picker). In progress.
+**Status:** COMPLETE 2026-07-13 (auto mode only, no manual-Studio look picker).
 **Builds on:** [[auto-video-generator]]
 
 ## Goal
@@ -61,4 +61,25 @@ output reads as deliberately edited, not just stitched.
 
 ## Work log
 
-- (pending approval)
+- **`videoProcessor.js`** — new style fields exactly per plan:
+  `transitionDuration` (feeds the existing clamped-T math), `kenBurnsPan`
+  (2 extra zoompan variants: L→R / R→L pans at fixed 1.15 zoom driven by
+  `on`), `look` ('vibrant'|'cinema'|'warm' — module-level LOOKS table of
+  eq/colorbalance chains; supersedes legacy colorPolish), `sharpen`
+  (unsharp 5:5:0.6), `vignette` (angle=PI/6), `grain` (noise=alls=5:allf=t),
+  `letterbox` (two drawbox fills: 12% landscape / 7% portrait). Post-chain
+  order: grade → sharpen → vignette → grain → bars → edge fades last.
+- **`server.js`** — VIBES restructured to carry a full per-vibe `style`
+  (pacing, transition set + speed, look, effects); AUTO_STYLE keeps the
+  shared flags; decisions log now includes look and xfade speed.
+- **Client** — AutoPage vibe hints describe each identity. Build clean.
+- **Verification (all green)**:
+  - All new xfade names (zoomin, squeezeh, dissolve, fadegrays, hblur,
+    smoothdown) confirmed present in the bundled FFmpeg 6.1 enum.
+  - Selftest 8/8 PASS — auto-style scenario now runs the FULL stack (cinema
+    grade, grain, letterbox, vignette, sharpen, pans, T=0.4) and lands at
+    exactly 9.20s (10 − 2×0.4).
+  - Cinematic E2E over HTTP: output exactly 10.600s (13 − 3×0.8) at
+    1920x1080 with audio; "A Good Dream" by Jesse Keller fetched + ledgered
+    (5→6); decisions log shows look=cinema, cap=6s, xfade=0.8s.
+- **README** updated with the per-vibe identity matrix.

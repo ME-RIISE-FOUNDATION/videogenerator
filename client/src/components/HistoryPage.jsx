@@ -70,6 +70,23 @@ export default function HistoryPage() {
               ) : (
                 <p className="text-[11px] text-zinc-600">♪ no fetched music recorded</p>
               )}
+              {video.imageCredits && video.imageCredits.length > 0 ? (
+                <details className="text-[11px] text-zinc-500">
+                  <summary className="cursor-pointer select-none hover:text-zinc-300">
+                    🖼 {video.imageCredits.length} CC image{video.imageCredits.length > 1 ? 's' : ''} — credits
+                  </summary>
+                  <ul className="mt-1 list-inside list-disc space-y-0.5">
+                    {video.imageCredits.map((credit, i) => (
+                      <li key={`${credit.sourceUrl}-${i}`}>
+                        “{credit.title}” by {credit.creator} ({credit.license}) —{' '}
+                        <a href={credit.sourceUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-zinc-300">
+                          source
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
               <div className="flex gap-2 pt-1">
                 <a
                   href={video.url}

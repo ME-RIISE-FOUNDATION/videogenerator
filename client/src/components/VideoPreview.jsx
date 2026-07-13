@@ -5,9 +5,10 @@
  * requires credit if you publish the video.
  *
  * @param {{url: string, attribution: {title: string, creator: string,
- *   license: string, sourceUrl: string}|null, onStartOver: function}} props
+ *   license: string, sourceUrl: string}|null, imageCredits: Array<object>|null,
+ *   onStartOver: function}} props
  */
-export default function VideoPreview({ url, attribution, onStartOver }) {
+export default function VideoPreview({ url, attribution, imageCredits, onStartOver }) {
   const fileName = url.split('/').pop();
   return (
     <section className="rounded-xl border border-emerald-900 bg-emerald-950/30 p-4">
@@ -35,6 +36,23 @@ export default function VideoPreview({ url, attribution, onStartOver }) {
           </a>
           . Credit the artist if you publish this video.
         </p>
+      ) : null}
+      {imageCredits && imageCredits.length > 0 ? (
+        <details className="mt-2 text-[11px] text-zinc-500">
+          <summary className="cursor-pointer select-none hover:text-zinc-300">
+            🖼 {imageCredits.length} CC image{imageCredits.length > 1 ? 's' : ''} used — credits
+          </summary>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {imageCredits.map((credit, i) => (
+              <li key={`${credit.sourceUrl}-${i}`}>
+                “{credit.title}” by {credit.creator} ({credit.license}) —{' '}
+                <a href={credit.sourceUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-zinc-300">
+                  source
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       <a
         href={url}

@@ -12,7 +12,12 @@ export default function JobStatusPanels({ job, onRetry }) {
   return (
     <>
       {job.phase === 'done' && job.resultUrl ? (
-        <VideoPreview url={job.resultUrl} attribution={job.attribution} onStartOver={onRetry} />
+        <VideoPreview
+          url={job.resultUrl}
+          attribution={job.attribution}
+          imageCredits={job.imageCredits}
+          onStartOver={onRetry}
+        />
       ) : null}
 
       {job.busy ? <ProgressBar percent={job.percent} stage={job.stage} /> : null}

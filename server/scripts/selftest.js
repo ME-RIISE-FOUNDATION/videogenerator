@@ -17,6 +17,7 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { processJob, probeMedia, hasFilter, FFMPEG_PATH } from '../videoProcessor.js';
 import { resolveMusicTrack, markTrackUsed, getUsedTrackIds } from '../musicFetcher.js';
+import { synthNarration, wrapCaption } from '../scriptComposer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.join(__dirname, '..');
@@ -112,6 +113,8 @@ async function runScenario(spec) {
       audioMode: spec.audioMode,
       title: spec.title,
       style: spec.style || {},
+      scenes: spec.scenes || null,
+      voiceover: spec.voiceover || null,
       outputDir: OUTPUT_DIR,
       musicPath: spec.musicPath || null,
       audioDir: spec.audioDir,
@@ -203,6 +206,54 @@ async function main() {
       musicFadeIn: true,
     },
   });
+  // Script mode, offline path: two gradient-background scenes with wrapped
+  // captions, music-only narration. 4 + 4 = 8 − 0.5 overlap = 7.5s.
+  const captionA = path.join(ASSETS_DIR, 'caption-a.txt');
+  const captionB = path.join(ASSETS_DIR, 'caption-b.txt');
+  fs.writeFileSync(captionA, wrapCaption('The journey began at dawn with a long walk through the quiet pine forest.', 34), 'utf8');
+  fs.writeFileSync(captionB, wrapCaption('By sunset we reached the summit and watched the valley turn to gold.', 34), 'utf8');
+  await runScenario({
+    name: 'script-scenes',
+    files: [],
+    layout: 'landscape', audioMode: 'mute', title: '',
+    audioDir: AUDIO_DIR, expectedDuration: 7.5, expectAudio: true,
+    scenes: [
+      { duration: 4, imagePath: null, captionFile: captionA, gradient: ['0x1b2a4a', '0x0c0f1c'] },
+      { duration: 4, imagePath: null, captionFile: captionB, gradient: ['0x3a1c47', '0x120a1e'] },
+    ],
+  });
+
+  // Script mode with Windows TTS narration (voice-only audio, no music).
+  // Skips with a pass-note if SAPI is unavailable on this machine.
+  console.log('\n--- TTS narration (Windows SAPI) ---');
+  const narrA = await synthNarration({
+    text: 'The journey began at dawn with a long walk through the forest.',
+    wavPath: path.join(ASSETS_DIR, 'narr-a.wav'), workDir: ASSETS_DIR, index: 900,
+  });
+  const narrB = await synthNarration({
+    text: 'By sunset we reached the summit together.',
+    wavPath: path.join(ASSETS_DIR, 'narr-b.wav'), workDir: ASSETS_DIR, index: 901,
+  });
+  if (narrA && narrB) {
+    const dA = Math.max(3, narrA.duration + 0.8);
+    const dB = Math.max(3, narrB.duration + 0.8);
+    console.log(`  narration synthesized: ${narrA.duration.toFixed(2)}s + ${narrB.duration.toFixed(2)}s`);
+    await runScenario({
+      name: 'script-tts',
+      files: [],
+      layout: 'landscape', audioMode: 'mute', title: '',
+      audioDir: EMPTY_AUDIO_DIR, expectedDuration: dA + dB - 0.5, expectAudio: true,
+      scenes: [
+        { duration: dA, imagePath: null, captionFile: captionA, voPath: narrA.path },
+        { duration: dB, imagePath: null, captionFile: captionB, voPath: narrB.path },
+      ],
+      voiceover: { mode: 'tts' },
+    });
+  } else {
+    console.log('  SKIP: Windows SAPI text-to-speech unavailable on this machine.');
+    results.push({ name: 'script-tts (skipped: no SAPI)', pass: true });
+  }
+
   // Empty music folder + mute mode → video-only output, with a warning, no crash.
   await runScenario({
     name: 'empty-audio-mute',

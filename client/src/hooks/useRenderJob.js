@@ -17,6 +17,7 @@ export default function useRenderJob() {
   const [stage, setStage] = useState('');
   const [resultUrl, setResultUrl] = useState(null);
   const [attribution, setAttribution] = useState(null);
+  const [imageCredits, setImageCredits] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [warnings, setWarnings] = useState([]);
 
@@ -46,10 +47,11 @@ export default function useRenderJob() {
       socket.on('warning', ({ message }) => {
         setWarnings((prev) => (prev.includes(message) ? prev : [...prev, message]));
       });
-      socket.on('complete', ({ url, attribution: credit }) => {
+      socket.on('complete', ({ url, attribution: credit, imageCredits: images }) => {
         setPercent(100);
         setResultUrl(url);
         setAttribution(credit || null);
+        setImageCredits(images || null);
         setPhase('done');
         disconnectSocket();
       });
@@ -72,6 +74,7 @@ export default function useRenderJob() {
       setErrorMessage('');
       setResultUrl(null);
       setAttribution(null);
+      setImageCredits(null);
 
       try {
         const response = await fetch('/api/generate', { method: 'POST', body: formData });
@@ -100,6 +103,7 @@ export default function useRenderJob() {
     setWarnings([]);
     setResultUrl(null);
     setAttribution(null);
+    setImageCredits(null);
   }, [disconnectSocket]);
 
   return {
@@ -108,6 +112,7 @@ export default function useRenderJob() {
     stage,
     resultUrl,
     attribution,
+    imageCredits,
     errorMessage,
     warnings,
     busy: phase === 'uploading' || phase === 'processing',

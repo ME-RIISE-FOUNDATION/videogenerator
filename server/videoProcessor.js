@@ -76,6 +76,7 @@ const IMAGE_DURATION = 3; // seconds each still image is shown
 const TITLE_DURATION = 3; // seconds for the optional title slide
 const TRANSITION_DURATION = 0.5; // seconds of xfade overlap per boundary
 const MUSIC_DUCK_VOLUME = 0.35; // music level under clip audio in merge mode
+const VOICE_MUSIC_DUCK = 0.2; // music level under narration (script mode)
 const AUDIO_FADE_OUT = 2; // seconds of afade=t=out at the very end
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
@@ -253,7 +254,15 @@ export function listMusicTracks(audioDir) {
  *
  * @param {object} options
  * @param {string}   options.jobId       Unique job id; output becomes `<outputDir>/<jobId>.mp4`.
- * @param {string[]} options.files       Absolute media paths in upload order.
+ * @param {string[]} [options.files]     Absolute media paths in upload order.
+ * @param {Array<object>} [options.scenes] Script-mode alternative to `files`:
+ *   each `{ duration, imagePath|null, captionFile|null, voPath|null, gradient? }`
+ *   becomes an animated scene (Ken Burns image or animated gradient) with an
+ *   optional lower-third caption and optional per-scene narration WAV.
+ * @param {object}   [options.voiceover] Narration config for scenes:
+ *   `{ mode: 'file', path }` — one uploaded track narrates the whole video;
+ *   `{ mode: 'tts' }` — per-scene WAVs from scenes[].voPath. Either way the
+ *   background music is ducked to 0.2 under the voice.
  * @param {'portrait'|'landscape'} options.layout Output geometry (1080x1920 / 1920x1080).
  * @param {'mute'|'merge'} options.audioMode 'mute' = music only; 'merge' = clip audio + ducked music.
  * @param {string}   options.title       Optional title; non-empty prepends a 3s drawtext slide.
@@ -288,7 +297,9 @@ export function listMusicTracks(audioDir) {
 export async function processJob(options) {
   const {
     jobId,
-    files,
+    files = [],
+    scenes = null,
+    voiceover = null,
     layout = 'landscape',
     audioMode = 'mute',
     title = '',
@@ -332,11 +343,27 @@ export async function processJob(options) {
   onProgress(0, 'Analyzing media');
 
   // ---------------------------------------------------------------- probing
-  // Build the ordered item list. Images get a fixed 3s duration; videos are
-  // probed for real duration and audio presence. Unreadable videos are skipped
-  // with a warning rather than killing the job.
+  // Build the ordered item list. Script mode supplies pre-built scenes;
+  // otherwise images get a fixed 3s duration and videos are probed for real
+  // duration and audio presence. Unreadable videos are skipped with a warning
+  // rather than killing the job.
   const items = [];
-  for (const filePath of files) {
+  const useScenes = Array.isArray(scenes) && scenes.length > 0;
+  if (useScenes) {
+    for (const scene of scenes) {
+      items.push({
+        type: 'scene',
+        duration: scene.duration,
+        hasAudio: false,
+        imagePath: scene.imagePath || null,
+        captionFile: scene.captionFile || null,
+        voPath: scene.voPath || null,
+        voIndex: -1,
+        gradient: Array.isArray(scene.gradient) ? scene.gradient : ['0x1b2a4a', '0x0c0f1c'],
+      });
+    }
+  }
+  for (const filePath of useScenes ? [] : files) {
     const ext = path.extname(filePath).toLowerCase();
     if (IMAGE_EXTS.has(ext)) {
       items.push({ type: 'image', path: filePath, duration: IMAGE_DURATION, hasAudio: false });
@@ -418,6 +445,19 @@ export async function processJob(options) {
     if (item.type === 'title') {
       // Synthesized black slide; already at target size and fps.
       command.input(`color=c=black:s=${W}x${H}:r=${FPS}:d=${item.duration}`).inputFormat('lavfi');
+    } else if (item.type === 'scene') {
+      if (item.imagePath) {
+        // Single frame in — zoompan below animates it.
+        command.input(item.imagePath);
+      } else {
+        // Offline fallback: subtly animated dark gradient background.
+        command
+          .input(
+            `gradients=s=${W}x${H}:c0=${item.gradient[0]}:c1=${item.gradient[1]}` +
+            `:speed=0.02:r=${FPS}:d=${item.duration.toFixed(3)}`
+          )
+          .inputFormat('lavfi');
+      }
     } else if (item.type === 'image') {
       if (kenBurns) {
         // Single frame in — zoompan below duplicates it into an animated clip.
@@ -431,11 +471,33 @@ export async function processJob(options) {
     }
   });
 
+  // Inputs after the visual items: narration (whole-video file OR per-scene
+  // TTS WAVs), then music — indexes tracked dynamically.
+  let inputCount = items.length;
+  let voiceIndex = -1;
+  if (voiceover && voiceover.mode === 'file' && voiceover.path) {
+    voiceIndex = inputCount++;
+    command.input(voiceover.path);
+  } else if (voiceover && voiceover.mode === 'tts') {
+    items.forEach((item) => {
+      if (item.voPath) {
+        item.voIndex = inputCount++;
+        command.input(item.voPath);
+      }
+    });
+  }
+
   let musicIndex = -1;
   if (musicPath) {
-    musicIndex = items.length;
+    musicIndex = inputCount++;
     // -stream_loop -1 repeats the track forever; atrim below cuts it to length.
     command.input(musicPath).inputOptions(['-stream_loop', '-1']);
+  }
+
+  // Captions need a system font; without one the video still renders.
+  const captionFont = useScenes ? findFontFile() : null;
+  if (useScenes && !captionFont && items.some((it) => it.captionFile)) {
+    warn('No system font found — captions will be omitted.');
   }
 
   const filters = [];
@@ -449,6 +511,43 @@ export async function processJob(options) {
     `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${FPS},format=yuv420p`;
 
   items.forEach((item, i) => {
+    if (item.type === 'scene') {
+      // Lower-third caption: wrapped text via textfile= (no escaping issues),
+      // readable box, alpha fade in/out over the scene.
+      let caption = '';
+      if (item.captionFile && captionFont) {
+        const capSize = Math.round(Math.min(W, H) / 18);
+        const fadeOutAt = Math.max(0.6, item.duration - 0.6).toFixed(3);
+        caption =
+          `drawtext=fontfile=${escapeFilterPath(captionFont)}` +
+          `:textfile=${escapeFilterPath(item.captionFile)}` +
+          `:fontcolor=white:fontsize=${capSize}:line_spacing=10` +
+          `:box=1:boxcolor=black@0.45:boxborderw=18` +
+          `:x=(w-text_w)/2:y=h-text_h-h*0.10` +
+          `:alpha='if(lt(t,0.6),t/0.6,if(gt(t,${fadeOutAt}),(${item.duration.toFixed(3)}-t)/0.6,1))',`;
+      }
+      if (item.imagePath) {
+        const frames = Math.round(item.duration * FPS);
+        const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+        const motions = [
+          `z='min(zoom+0.0012,1.15)':${centered}`,
+          `z='if(lte(on,1),1.15,max(zoom-0.0012,1.001))':${centered}`,
+          `z='1.15':x='(iw-iw/zoom)*on/${Math.max(1, frames - 1)}':y='ih/2-(ih/zoom/2)'`,
+          `z='1.15':x='(iw-iw/zoom)*(1-on/${Math.max(1, frames - 1)})':y='ih/2-(ih/zoom/2)'`,
+        ];
+        filters.push(
+          `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,` +
+          `crop=${W * 2}:${H * 2},` +
+          `zoompan=${pickRandom(motions)}:d=${frames}:s=${W}x${H}:fps=${FPS},` +
+          `${caption}setsar=1,format=yuv420p[v${i}]`
+        );
+      } else {
+        // Gradient source is already W×H at the right fps.
+        filters.push(`[${i}:v]${caption}setsar=1,format=yuv420p[v${i}]`);
+      }
+      return;
+    }
+
     if (item.type === 'image' && kenBurns) {
       // Ken Burns: cover-crop to fill the frame (no bars), then a slow zoompan
       // (random in/out per photo). The single input frame is duplicated into
@@ -579,7 +678,63 @@ export async function processJob(options) {
   // Shared normalization for any audio stream entering the graph.
   const audioNorm = 'aresample=sample_rate=44100:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo';
 
-  if (audioMode === 'merge') {
+  const activeVoice =
+    voiceover && ((voiceover.mode === 'file' && voiceIndex >= 0) || voiceover.mode === 'tts');
+
+  if (activeVoice) {
+    // ---------------------------------------------------- narration modes
+    let voiceLabel = null;
+    if (voiceover.mode === 'file') {
+      // One uploaded track narrates the whole video; scene durations were
+      // already sized to fit it, so just normalize/pad/trim to total length.
+      filters.push(
+        `[${voiceIndex}:a]${audioNorm},apad,atrim=duration=${dur},asetpts=PTS-STARTPTS[avoice]`
+      );
+      voiceLabel = 'avoice';
+    } else {
+      // Per-scene TTS WAVs: segments of exactly each scene's duration
+      // (silence for scenes without narration), joined with the same
+      // acrossfade overlap as the video so A/V stay aligned.
+      items.forEach((item, i) => {
+        const d = item.duration.toFixed(3);
+        if (item.voIndex >= 0) {
+          filters.push(
+            `[${item.voIndex}:a]${audioNorm},apad,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
+          );
+        } else {
+          filters.push(
+            `anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
+          );
+        }
+      });
+      let aLabel = 'a0';
+      for (let i = 1; i < items.length; i++) {
+        const outLabel = i === items.length - 1 ? 'avoice' : `ax${i}`;
+        filters.push(`[${aLabel}][a${i}]acrossfade=d=${T}:c1=tri:c2=tri[${outLabel}]`);
+        aLabel = outLabel;
+      }
+      if (items.length === 1) {
+        filters.push('[a0]anull[avoice]');
+      }
+      voiceLabel = 'avoice';
+    }
+
+    if (musicPath) {
+      // Music sits well under the voice (0.2); amix halves both, volume=2
+      // restores voice to 1.0 and leaves music at the intended duck level.
+      filters.push(
+        `[${musicIndex}:a]${audioNorm},atrim=duration=${dur},asetpts=PTS-STARTPTS,` +
+        `${musicFadeIn ? 'afade=t=in:st=0:d=1,' : ''}volume=${VOICE_MUSIC_DUCK}[amusic]`
+      );
+      filters.push(
+        `[${voiceLabel}][amusic]amix=inputs=2:duration=first:dropout_transition=3,volume=2,` +
+        `afade=t=out:st=${fadeStart}:d=${AUDIO_FADE_OUT}[aout]`
+      );
+    } else {
+      filters.push(`[${voiceLabel}]afade=t=out:st=${fadeStart}:d=${AUDIO_FADE_OUT}[aout]`);
+    }
+    hasAudioOut = true;
+  } else if (audioMode === 'merge') {
     // Per-item audio segments, each EXACTLY as long as its video item:
     //  - real audio: normalize → apad (extend if short) → atrim (cut to length)
     //  - images / silent videos: anullsrc silence of matching duration, so the
