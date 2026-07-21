@@ -98,6 +98,72 @@ export function parseScript(raw) {
   };
 }
 
+/** Keyword → ideogram map for scene headlines (India-aware). */
+const EMOJI_MAP = {
+  temple: '🛕', mosque: '🕌', church: '⛪', palace: '🏰', fort: '🏯', taj: '🕌',
+  diwali: '🪔', festival: '🎉', celebration: '🎊', wedding: '💍', dance: '💃',
+  yoga: '🧘', meditation: '🧘', cricket: '🏏', music: '🎵', drum: '🥁',
+  mountain: '⛰', mountains: '🏔', himalaya: '🏔', hill: '⛰', peak: '🏔',
+  summit: '🏔', valley: '🏞', river: '🏞', ganges: '🌊', lake: '🌊',
+  ocean: '🌊', beach: '🏖', island: '🏝', waterfall: '💦', monsoon: '🌧',
+  rain: '🌧', storm: '⛈', cloud: '☁', clouds: '☁', sunrise: '🌅',
+  sunset: '🌇', morning: '🌄', night: '🌙', star: '⭐', stars: '✨',
+  forest: '🌲', tree: '🌳', trees: '🌳', pine: '🌲', jungle: '🌴',
+  garden: '🌷', flower: '🌸', flowers: '💐', lotus: '🪷', spring: '🌱',
+  summer: '☀', winter: '❄', snow: '❄', desert: '🏜', camel: '🐪',
+  tiger: '🐅', elephant: '🐘', peacock: '🦚', bird: '🐦', cow: '🐄',
+  monkey: '🐒', fish: '🐟', road: '🛣', journey: '🧭', travel: '✈',
+  trip: '🧳', walk: '🚶', hike: '🥾', hiking: '🥾', train: '🚂',
+  railway: '🚉', boat: '⛵', ship: '🚢', rickshaw: '🛺', cycle: '🚲',
+  market: '🛍', bazaar: '🏪', city: '🏙', village: '🛖', home: '🏡',
+  house: '🏠', school: '🏫', office: '🏢', food: '🍛', curry: '🍛',
+  spice: '🌶', spices: '🌶', chai: '🍵', tea: '🍵', coffee: '☕',
+  sweet: '🍬', mango: '🥭', rice: '🍚', bread: '🫓', dinner: '🍽',
+  breakfast: '🍳', family: '👪', friends: '🤝', love: '❤', heart: '❤',
+  child: '🧒', children: '🧒', baby: '👶', mother: '🤱', team: '🤝',
+  work: '💼', business: '📈', money: '💰', success: '🏆', victory: '🏆',
+  award: '🥇', book: '📖', story: '📖', history: '📜', ancient: '🏛',
+  culture: '🎭', light: '💡', fire: '🔥', water: '💧', earth: '🌍',
+  world: '🌍', india: '🛕', peace: '🕊', dream: '💭', time: '⏳',
+  camera: '📷', photo: '📸', video: '🎬', game: '🎮', sport: '⚽',
+};
+
+/** Rotating fallback ideograms when no keyword matches. */
+const FALLBACK_ICONS = ['✨', '🌟', '🎬', '📍', '💫', '🌅'];
+
+/**
+ * Build a short headline overlay for a scene: 2–3 leading keywords in Title
+ * Case plus a matched ideogram (emoji) icon. The label is guaranteed to be
+ * plain letters/spaces, so it needs no filter-graph escaping.
+ *
+ * @param {string} text Scene text.
+ * @param {number} [sceneIndex] Used to rotate fallback icons.
+ * @returns {{icon: string, label: string}} Ideogram + short label.
+ */
+export function buildHeadline(text, sceneIndex = 0) {
+  const all = (text.toLowerCase().match(/[a-z]{4,}/g) || []).filter((w) => !STOPWORDS.has(w));
+  const seen = new Set();
+  const leading = [];
+  for (const word of all) {
+    if (!seen.has(word)) {
+      seen.add(word);
+      leading.push(word);
+      if (leading.length === 3) break;
+    }
+  }
+  const label =
+    leading.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ') || `Scene ${sceneIndex + 1}`;
+  let icon = null;
+  for (const word of all) {
+    if (EMOJI_MAP[word]) {
+      icon = EMOJI_MAP[word];
+      break;
+    }
+  }
+  if (!icon) icon = FALLBACK_ICONS[sceneIndex % FALLBACK_ICONS.length];
+  return { icon, label };
+}
+
 /**
  * Reading-time duration for a scene (music-only narration mode).
  *
@@ -122,33 +188,79 @@ export function extractKeywords(text) {
   return (text.toLowerCase().match(/[a-z]+/g) || ['abstract']).slice(0, 3).join(' ');
 }
 
+const STYLE_CATEGORIES = {
+  photo: 'photograph',
+  illustration: 'illustration',
+  artwork: 'digitized_artwork',
+};
+
+/**
+ * Search one Openverse images query/category combination.
+ *
+ * @param {string} q Query string.
+ * @param {string|null} category Openverse category filter, or null for none.
+ * @returns {Promise<Array<object>>} Candidates with a usable `url` (empty on
+ *   no results or any request failure — never throws).
+ */
+async function searchOpenverseImages(q, category) {
+  try {
+    const params = new URLSearchParams({ q, license_type: 'commercial', page_size: '20' });
+    if (category) params.set('category', category);
+    const response = await fetch(`${OPENVERSE_IMAGES_API}?${params}`, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.results || []).filter((r) => r.url);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Fetch one CC-licensed image for a scene from the Openverse images API and
  * download it next to the job's uploads.
+ *
+ * A specific scene query ("temple bells rang") combined with both a style
+ * category AND a theme keyword narrows the result pool fast — often to zero,
+ * observed live even for a common theme like "India". Rather than fall back
+ * to a gradient background on the very first empty search, this broadens the
+ * query in three steps until something comes back: the full themed+styled
+ * query, then the same query WITHOUT the category filter (style categories
+ * are the most likely to starve results), then the theme alone (guaranteed
+ * broad, still on-theme). The style/category is still honored whenever it
+ * actually has matches — this only kicks in on genuine sparsity.
  *
  * @param {object} options
  * @param {string} options.query Keyword query.
  * @param {string} options.destDir Directory for the downloaded image.
  * @param {number} options.index Scene index (used in the filename).
+ * @param {string} [options.style] Art style: photo|illustration|artwork map to
+ *   Openverse's category filter; abstract appends a keyword; suggested = none.
+ * @param {string} [options.theme] Theme appended to every query (e.g. "India").
  * @returns {Promise<{path: string, attribution: {title: string, creator: string,
- *   license: string, sourceUrl: string}}|null>} Image + credit, or null on any
- *   failure (caller falls back to a gradient background).
+ *   license: string, sourceUrl: string}}|null>} Image + credit, or null when
+ *   every broadened attempt still comes up empty (caller falls back to a
+ *   gradient background).
  */
-export async function fetchSceneImage({ query, destDir, index }) {
+export async function fetchSceneImage({ query, destDir, index, style = 'suggested', theme = '' }) {
+  const themedQuery = theme && theme.trim() ? `${query} ${theme.trim()}` : query;
+  const styledQuery = style === 'abstract' ? `${themedQuery} abstract` : themedQuery;
+  const category = STYLE_CATEGORIES[style] || null;
+
+  const attempts = [{ q: styledQuery, category }];
+  if (category) attempts.push({ q: styledQuery, category: null });
+  if (theme && theme.trim()) attempts.push({ q: theme.trim(), category: null });
+
+  let candidates = [];
+  for (const attempt of attempts) {
+    candidates = await searchOpenverseImages(attempt.q, attempt.category);
+    if (candidates.length > 0) break;
+  }
+  if (candidates.length === 0) return null;
+
   try {
-    const params = new URLSearchParams({
-      q: query,
-      license_type: 'commercial',
-      page_size: '20',
-    });
-    const response = await fetch(`${OPENVERSE_IMAGES_API}?${params}`, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    const candidates = (data.results || []).filter((r) => r.url);
-    if (candidates.length === 0) return null;
     const pick = candidates[Math.floor(Math.random() * candidates.length)];
 
     const ext = /\.(png|webp)(\?|$)/i.test(pick.url) ? '.png' : '.jpg';

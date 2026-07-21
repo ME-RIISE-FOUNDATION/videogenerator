@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import VibePicker from './VibePicker.jsx';
+import ArtStylePicker from './ArtStylePicker.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
 import useRenderJob from '../hooks/useRenderJob.js';
@@ -18,7 +19,25 @@ const VOICE_MODES = [
   {
     value: 'music',
     label: '🎵 Music only',
-    hint: 'No narration — captions carry the script over the soundtrack.',
+    hint: 'No narration — the soundtrack plays under the visuals.',
+  },
+];
+
+const CAPTION_MODES = [
+  {
+    value: 'headline',
+    label: '🔤 Headline + icon',
+    hint: 'A big ideogram icon and a short 2–3 word title for each scene (default) — not the whole script.',
+  },
+  {
+    value: 'full',
+    label: '📄 Full text',
+    hint: 'The old style: the entire scene paragraph as a lower-third subtitle.',
+  },
+  {
+    value: 'none',
+    label: '🚫 None',
+    hint: 'Pure visuals, no on-screen text at all. Narration (if on) still speaks the full script.',
   },
 ];
 
@@ -33,6 +52,9 @@ export default function ScriptPage() {
   const [layout, setLayout] = useState('landscape');
   const [voiceMode, setVoiceMode] = useState('tts');
   const [voiceFile, setVoiceFile] = useState(null);
+  const [artStyle, setArtStyle] = useState('suggested');
+  const [imageTheme, setImageTheme] = useState('India');
+  const [captionMode, setCaptionMode] = useState('headline');
   const voiceInputRef = useRef(null);
 
   const job = useRenderJob();
@@ -47,11 +69,14 @@ export default function ScriptPage() {
     formData.append('vibe', vibe);
     formData.append('layout', layout);
     formData.append('voiceMode', voiceMode);
+    formData.append('artStyle', artStyle);
+    formData.append('imageTheme', imageTheme);
+    formData.append('captionMode', captionMode);
     if (voiceMode === 'voice' && voiceFile) {
       formData.append('voice', voiceFile, voiceFile.name);
     }
     job.submit(formData);
-  }, [canGenerate, script, vibe, layout, voiceMode, voiceFile, job]);
+  }, [canGenerate, script, vibe, layout, voiceMode, voiceFile, artStyle, imageTheme, captionMode, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -75,8 +100,10 @@ export default function ScriptPage() {
             className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm leading-relaxed text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-indigo-500 disabled:opacity-50"
           />
           <p className="mt-2 text-[11px] leading-snug text-zinc-600">
-            Each blank-line-separated paragraph becomes a scene with its own auto-fetched visual and caption.
-            A short first line becomes the title slide. Up to 20 scenes.
+            Each blank-line-separated paragraph becomes a scene with its own auto-fetched visual.
+            A short first line becomes the title slide. Up to 20 scenes. On-screen text is a short
+            headline + icon by default (see Captions in the sidebar) — narration, if enabled, always
+            speaks the full scene text regardless of what's shown.
           </p>
         </section>
 
@@ -88,6 +115,33 @@ export default function ScriptPage() {
           <div>
             <span className="mb-1.5 block text-xs font-medium text-zinc-300">Vibe</span>
             <VibePicker vibe={vibe} onChange={setVibe} disabled={job.busy} />
+          </div>
+
+          <ArtStylePicker
+            value={artStyle}
+            onChange={setArtStyle}
+            disabled={job.busy}
+            hint="Suggested keeps the vibe's own color grade and searches images freely; the other options steer BOTH which images are fetched (photo / illustration / artwork / abstract) AND the color grade."
+          />
+
+          <div>
+            <label htmlFor="script-theme" className="mb-1.5 block text-xs font-medium text-zinc-300">
+              Image theme
+            </label>
+            <input
+              id="script-theme"
+              type="text"
+              value={imageTheme}
+              maxLength={100}
+              disabled={job.busy}
+              onChange={(e) => setImageTheme(e.target.value)}
+              placeholder="India"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-indigo-500 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[11px] leading-snug text-zinc-600">
+              Added to every scene's image search (e.g. "temple sunrise" → "temple sunrise India").
+              Clear it for visuals with no regional bias.
+            </p>
           </div>
 
           <div>
@@ -104,6 +158,36 @@ export default function ScriptPage() {
               <option value="landscape">Landscape (16:9 — 1920x1080)</option>
               <option value="portrait">Portrait (9:16 — 1080x1920)</option>
             </select>
+          </div>
+
+          <div>
+            <span className="mb-1.5 block text-xs font-medium text-zinc-300">Captions</span>
+            <div className="grid grid-cols-1 gap-2">
+              {CAPTION_MODES.map((option) => (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 transition-all duration-200 ${
+                    captionMode === option.value
+                      ? 'border-indigo-400/60 bg-indigo-950/40 shadow-lg shadow-indigo-950/40 ring-1 ring-indigo-400/30'
+                      : 'border-zinc-700 bg-zinc-950/80 hover:-translate-y-0.5 hover:border-zinc-500'
+                  } ${job.busy ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name="captionMode"
+                    value={option.value}
+                    checked={captionMode === option.value}
+                    disabled={job.busy}
+                    onChange={() => setCaptionMode(option.value)}
+                    className="mt-0.5 accent-indigo-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-zinc-100">{option.label}</span>
+                    <span className="block text-xs text-zinc-500">{option.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div>

@@ -31,6 +31,7 @@ import {
   fetchSceneImage,
   synthNarration,
   wrapCaption,
+  buildHeadline,
   readingDuration,
 } from './scriptComposer.js';
 
@@ -47,6 +48,37 @@ const VOICE_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg']);
 const VALID_LAYOUTS = new Set(['portrait', 'landscape']);
 const VALID_AUDIO_MODES = new Set(['mute', 'merge']);
 const VALID_VOICE_MODES = new Set(['voice', 'tts', 'music']);
+const VALID_CAPTION_MODES = new Set(['headline', 'full', 'none']);
+
+/**
+ * Art-style chip options shared by the Studio, Auto and Script tabs.
+ * "suggested" means "don't override anything" — Auto/Script keep their
+ * vibe's own look, Studio stays ungraded. Every other value overrides the
+ * color look everywhere, and on the Script tab ALSO steers which Openverse
+ * image category gets fetched (the same values are reused 1:1 as the
+ * `style` param of scriptComposer's fetchSceneImage).
+ */
+const ART_STYLES = new Set(['suggested', 'photo', 'illustration', 'artwork', 'abstract']);
+const ART_STYLE_LOOK = {
+  illustration: 'vibrant',
+  artwork: 'cinema',
+  abstract: 'warm',
+  // 'photo' intentionally has no entry — it means "natural", i.e. no grade.
+};
+
+/**
+ * Apply the shared Art-style chip's color-look override onto a style object,
+ * in place. "suggested" leaves whatever look the mode already picked (a
+ * vibe's default, or none for Studio); every other value replaces it —
+ * including 'photo', which clears any look for an ungraded, natural image.
+ *
+ * @param {object} style Mutable style object (other fields already set).
+ * @param {string} artStyle One of ART_STYLES.
+ */
+function applyArtStyleLook(style, artStyle) {
+  if (artStyle === 'suggested') return;
+  style.look = ART_STYLE_LOOK[artStyle]; // undefined for 'photo' → no grade
+}
 
 /** Dark gradient pairs cycled through for scenes with no fetched image. */
 const SCENE_GRADIENTS = [
@@ -257,6 +289,9 @@ app.post(
     const musicQuery = typeof req.body.musicQuery === 'string' ? req.body.musicQuery.slice(0, 100) : '';
     const script = typeof req.body.script === 'string' ? req.body.script.slice(0, 8000) : '';
     const voiceMode = VALID_VOICE_MODES.has(req.body.voiceMode) ? req.body.voiceMode : 'music';
+    const artStyle = ART_STYLES.has(req.body.artStyle) ? req.body.artStyle : 'suggested';
+    const imageTheme = typeof req.body.imageTheme === 'string' ? req.body.imageTheme.slice(0, 100) : 'India';
+    const captionMode = VALID_CAPTION_MODES.has(req.body.captionMode) ? req.body.captionMode : 'headline';
 
     if (mode === 'script') {
       if (!script.trim()) {
@@ -299,6 +334,9 @@ app.post(
         script,
         voiceMode,
         voicePath: voiceFile ? voiceFile.path : null,
+        artStyle,
+        imageTheme,
+        captionMode,
       })
     );
   }
@@ -380,7 +418,8 @@ app.delete('/api/history/:jobId', (req, res) => {
  * @param {string} jobId Job identifier.
  * @param {string[]} files Absolute media paths in upload order.
  * @param {{mode: string, vibe: string, layout: string, audioMode: string,
- *   title: string, musicQuery: string}} config Render config.
+ *   title: string, musicQuery: string, artStyle: string, imageTheme: string,
+ *   captionMode: string}} config Render config.
  */
 async function runJob(jobId, files, config) {
   const uploadDir = path.join(UPLOADS_DIR, jobId);
@@ -413,12 +452,18 @@ async function runJob(jobId, files, config) {
       config.audioMode = 'mute';
       config.musicQuery = vibe.musicQuery;
       style = { ...AUTO_STYLE, ...vibe.style };
+      applyArtStyleLook(style, config.artStyle);
       console.log(
         `[job ${jobId}] auto decisions: layout=${config.layout} ` +
         `(${portraitVotes}P/${landscapeVotes}L), vibe=${config.vibe}, ` +
-        `look=${vibe.style.look}, clip cap=${vibe.style.maxClipSeconds}s, ` +
-        `xfade=${vibe.style.transitionDuration}s, music="${vibe.musicQuery}"`
+        `look=${style.look || 'none'} (artStyle=${config.artStyle}), ` +
+        `clip cap=${vibe.style.maxClipSeconds}s, xfade=${vibe.style.transitionDuration}s, ` +
+        `music="${vibe.musicQuery}"`
       );
+    } else if (config.mode === 'manual') {
+      // Studio gets no automatic effects, but the shared Art-style chip still
+      // lets a manual render opt into one of the named color grades.
+      applyArtStyleLook(style, config.artStyle);
     }
 
     // Script mode: the written script becomes scenes with fetched visuals,
@@ -439,6 +484,7 @@ async function runJob(jobId, files, config) {
       config.audioMode = 'mute';
       config.musicQuery = vibe.musicQuery;
       style = { ...AUTO_STYLE, ...vibe.style };
+      applyArtStyleLook(style, config.artStyle);
 
       // Narration decides scene durations.
       let voiceMode = config.voiceMode;
@@ -484,7 +530,12 @@ async function runJob(jobId, files, config) {
         voiceoverOpt = { mode: 'file', path: config.voicePath };
       }
 
-      // Visuals + captions per scene.
+      // Visuals + on-screen text per scene. Captions are NOT the full script
+      // by default — that was too much text on screen. The default is a
+      // short headline (2–3 keywords, Title Case) under a large ideogram
+      // icon; "full" restores the old full-paragraph lower third; "none"
+      // renders the visual alone. Narration (any mode) always speaks the
+      // complete scene text regardless of what's shown on screen.
       const wrapChars = config.layout === 'portrait' ? 24 : 34;
       scenesConfig = [];
       for (let i = 0; i < sceneMeta.length; i++) {
@@ -493,14 +544,33 @@ async function runJob(jobId, files, config) {
           query: extractKeywords(sceneMeta[i].text),
           destDir: uploadDir,
           index: i,
+          style: config.artStyle,
+          theme: config.imageTheme,
         });
         if (image) imageCredits.push(image.attribution);
-        const captionFile = path.join(uploadDir, `caption-${i}.txt`);
-        fs.writeFileSync(captionFile, wrapCaption(sceneMeta[i].text, wrapChars), 'utf8');
+
+        let captionFile = null;
+        let headlineIconFile = null;
+        let headlineLabelFile = null;
+        if (config.captionMode === 'full') {
+          captionFile = path.join(uploadDir, `caption-${i}.txt`);
+          fs.writeFileSync(captionFile, wrapCaption(sceneMeta[i].text, wrapChars), 'utf8');
+        } else if (config.captionMode === 'headline') {
+          const headline = buildHeadline(sceneMeta[i].text, i);
+          headlineIconFile = path.join(uploadDir, `headline-icon-${i}.txt`);
+          headlineLabelFile = path.join(uploadDir, `headline-label-${i}.txt`);
+          fs.writeFileSync(headlineIconFile, headline.icon, 'utf8');
+          fs.writeFileSync(headlineLabelFile, headline.label, 'utf8');
+        }
+        // captionMode === 'none' leaves all three null — the scene renders
+        // as a pure visual with no on-screen text.
+
         scenesConfig.push({
           duration: sceneMeta[i].duration,
           imagePath: image ? image.path : null,
           captionFile,
+          headlineIconFile,
+          headlineLabelFile,
           voPath: sceneMeta[i].voPath,
           gradient: SCENE_GRADIENTS[i % SCENE_GRADIENTS.length],
         });
@@ -510,7 +580,9 @@ async function runJob(jobId, files, config) {
       }
       console.log(
         `[job ${jobId}] script decisions: scenes=${scenesConfig.length}, narration=${voiceMode}, ` +
-        `images=${imageCredits.length}, layout=${config.layout}, vibe=${config.vibe}` +
+        `images=${imageCredits.length}, layout=${config.layout}, vibe=${config.vibe}, ` +
+        `look=${style.look || 'none'} (artStyle=${config.artStyle}), theme=${JSON.stringify(config.imageTheme)}, ` +
+        `captions=${config.captionMode}` +
         (config.title ? `, title=${JSON.stringify(config.title)}` : '')
       );
     }

@@ -147,6 +147,24 @@ const FONT_CANDIDATES = {
 };
 
 /**
+ * Per-OS candidate emoji/pictogram fonts for scene ideogram icons. Regular UI
+ * fonts (Arial etc.) have no coverage for these glyphs — confirmed empirically:
+ * Segoe UI Emoji renders a clean monochrome outline icon via libfreetype,
+ * while Arial renders a blank "tofu" box for the same codepoint. Only
+ * SINGLE-CODEPOINT emoji are used with this font: multi-codepoint sequences
+ * (ZWJ family emoji, flag regional-indicator pairs) are not composed by
+ * libfreetype and render as broken/overlapping glyph clusters instead.
+ */
+const EMOJI_FONT_CANDIDATES = {
+  win32: ['C:/Windows/Fonts/seguiemj.ttf'],
+  darwin: ['/System/Library/Fonts/Apple Color Emoji.ttc'],
+  linux: [
+    '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+    '/usr/share/fonts/noto/NotoColorEmoji.ttf',
+  ],
+};
+
+/**
  * Probe a media file with the bundled ffprobe.
  *
  * @param {string} filePath Absolute path to the media file.
@@ -222,6 +240,19 @@ function findFontFile() {
 }
 
 /**
+ * Resolve the first available emoji/pictogram font for scene ideogram icons.
+ *
+ * @returns {string|null} Absolute font path, or null when nothing usable exists.
+ */
+function findEmojiFont() {
+  const candidates = EMOJI_FONT_CANDIDATES[process.platform] || EMOJI_FONT_CANDIDATES.linux;
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * Pick a uniformly random element from an array.
  *
  * @param {Array<*>} arr Non-empty array.
@@ -256,9 +287,14 @@ export function listMusicTracks(audioDir) {
  * @param {string}   options.jobId       Unique job id; output becomes `<outputDir>/<jobId>.mp4`.
  * @param {string[]} [options.files]     Absolute media paths in upload order.
  * @param {Array<object>} [options.scenes] Script-mode alternative to `files`:
- *   each `{ duration, imagePath|null, captionFile|null, voPath|null, gradient? }`
- *   becomes an animated scene (Ken Burns image or animated gradient) with an
- *   optional lower-third caption and optional per-scene narration WAV.
+ *   each `{ duration, imagePath|null, captionFile|null, headlineIconFile|null,
+ *   headlineLabelFile|null, voPath|null, gradient? }` becomes an animated
+ *   scene (Ken Burns image or animated gradient). Caption rendering is
+ *   mutually exclusive per scene: `captionFile` draws the old full-text
+ *   lower-third; `headlineIconFile`+`headlineLabelFile` draw a large ideogram
+ *   icon over a short title-case label instead (the default, less text on
+ *   screen); neither set → no on-screen text at all. Optional per-scene
+ *   narration WAV via `voPath`.
  * @param {object}   [options.voiceover] Narration config for scenes:
  *   `{ mode: 'file', path }` — one uploaded track narrates the whole video;
  *   `{ mode: 'tts' }` — per-scene WAVs from scenes[].voPath. Either way the
@@ -357,6 +393,8 @@ export async function processJob(options) {
         hasAudio: false,
         imagePath: scene.imagePath || null,
         captionFile: scene.captionFile || null,
+        headlineIconFile: scene.headlineIconFile || null,
+        headlineLabelFile: scene.headlineLabelFile || null,
         voPath: scene.voPath || null,
         voIndex: -1,
         gradient: Array.isArray(scene.gradient) ? scene.gradient : ['0x1b2a4a', '0x0c0f1c'],
@@ -494,10 +532,16 @@ export async function processJob(options) {
     command.input(musicPath).inputOptions(['-stream_loop', '-1']);
   }
 
-  // Captions need a system font; without one the video still renders.
+  // Captions need a system font; headlines additionally need an emoji font
+  // for the ideogram icon. Either missing degrades gracefully (label-only,
+  // or no on-screen text at all) rather than failing the render.
   const captionFont = useScenes ? findFontFile() : null;
-  if (useScenes && !captionFont && items.some((it) => it.captionFile)) {
-    warn('No system font found — captions will be omitted.');
+  const emojiFont = useScenes && items.some((it) => it.headlineIconFile) ? findEmojiFont() : null;
+  if (useScenes && !captionFont && items.some((it) => it.captionFile || it.headlineLabelFile)) {
+    warn('No system font found — on-screen text will be omitted.');
+  }
+  if (useScenes && captionFont && !emojiFont && items.some((it) => it.headlineIconFile)) {
+    warn('No emoji font found — scene icons will be omitted (label still shown).');
   }
 
   const filters = [];
@@ -512,19 +556,46 @@ export async function processJob(options) {
 
   items.forEach((item, i) => {
     if (item.type === 'scene') {
-      // Lower-third caption: wrapped text via textfile= (no escaping issues),
-      // readable box, alpha fade in/out over the scene.
+      // On-screen text: wrapped text via textfile= (no escaping issues),
+      // readable box, alpha fade in/out over the scene. Two mutually
+      // exclusive modes — full-text lower third (legacy `captionFile`), or
+      // the default headline lockup: a large ideogram icon over a short
+      // title-case label. Neither set → no text (silent visual scene).
       let caption = '';
+      const fadeOutAt = Math.max(0.6, item.duration - 0.6).toFixed(3);
+      const alphaExpr =
+        `'if(lt(t,0.6),t/0.6,if(gt(t,${fadeOutAt}),(${item.duration.toFixed(3)}-t)/0.6,1))'`;
       if (item.captionFile && captionFont) {
         const capSize = Math.round(Math.min(W, H) / 18);
-        const fadeOutAt = Math.max(0.6, item.duration - 0.6).toFixed(3);
         caption =
           `drawtext=fontfile=${escapeFilterPath(captionFont)}` +
           `:textfile=${escapeFilterPath(item.captionFile)}` +
           `:fontcolor=white:fontsize=${capSize}:line_spacing=10` +
           `:box=1:boxcolor=black@0.45:boxborderw=18` +
           `:x=(w-text_w)/2:y=h-text_h-h*0.10` +
-          `:alpha='if(lt(t,0.6),t/0.6,if(gt(t,${fadeOutAt}),(${item.duration.toFixed(3)}-t)/0.6,1))',`;
+          `:alpha=${alphaExpr},`;
+      } else if (item.headlineLabelFile && captionFont) {
+        // Icon lockup: large ideogram (Segoe UI Emoji etc.) above a short
+        // title-case label. The icon layer is skipped when no emoji font
+        // was resolved — the label alone still reads fine on its own.
+        const iconSize = Math.round(Math.min(W, H) / 6);
+        const labelSize = Math.round(Math.min(W, H) / 20);
+        if (item.headlineIconFile && emojiFont) {
+          caption +=
+            `drawtext=fontfile=${escapeFilterPath(emojiFont)}` +
+            `:textfile=${escapeFilterPath(item.headlineIconFile)}` +
+            `:fontcolor=white:fontsize=${iconSize}` +
+            `:box=1:boxcolor=black@0.32:boxborderw=20` +
+            `:x=(w-text_w)/2:y=h*0.58` +
+            `:alpha=${alphaExpr},`;
+        }
+        caption +=
+          `drawtext=fontfile=${escapeFilterPath(captionFont)}` +
+          `:textfile=${escapeFilterPath(item.headlineLabelFile)}` +
+          `:fontcolor=white:fontsize=${labelSize}` +
+          `:box=1:boxcolor=black@0.42:boxborderw=14` +
+          `:x=(w-text_w)/2:y=h*0.80` +
+          `:alpha=${alphaExpr},`;
       }
       if (item.imagePath) {
         const frames = Math.round(item.duration * FPS);

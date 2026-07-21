@@ -65,17 +65,44 @@ Open http://localhost:5173. Four pages, switched by the header tabs:
   - **🌊 Chill** — relaxed 0.6s soft transitions (dissolve, smooth, hblur),
     *Warm* golden grade, vignette, 5s clips, calm acoustic music.
 
+  Studio and Auto both also carry the shared **Art style** chip row
+  (✨ Suggested / 📷 Photo / 🎨 Illustration / 🖼️ Artwork / 🌀 Abstract) — pick
+  one to override the color grade (Photo = natural, no grade; the rest map to
+  the named looks above).
+
 - **📜 Script to Video** (`#/script`) — paste a script and get a finished
   video. Blank-line paragraphs become scenes (short first line = title
-  slide, up to 20 scenes). For every scene the app: extracts keywords and
+  slide, up to 20 scenes). For every scene the app extracts keywords and
   fetches a matching **CC image from Openverse** (animated gradient fallback
-  when offline), applies Ken Burns motion, and overlays a word-wrapped,
-  fade-in/out lower-third **caption**. Narration is a 3-way choice:
+  when offline or when nothing usable is found), applies Ken Burns motion,
+  and overlays on-screen text — **Captions**, chosen per render:
+  - **🔤 Headline + icon (default)** — a large ideogram icon (matched from an
+    India-aware keyword→emoji map, e.g. temple 🛕, diwali 🪔, monsoon 🌧,
+    cricket 🏏) over a short 2–3 word Title Case headline. NOT the full
+    script — this is deliberately light-touch, an accent rather than a
+    subtitle;
+  - **📄 Full text** — the old behavior: the whole scene paragraph as a
+    word-wrapped lower-third caption;
+  - **🚫 None** — pure visuals, no on-screen text.
+
+  Narration (independent of the caption choice — it always speaks the
+  complete scene text) is a 3-way choice:
   - **🎤 My voice** — upload a recording (.mp3/.wav/.m4a/.aac/.ogg); scene
     durations are word-count-weighted so the visuals fit your narration;
   - **🗣️ Computer voice** — the script is read aloud per scene by the
     built-in Windows voice (System.Speech, offline, no install);
-  - **🎵 Music only** — reading-speed pacing, captions carry the script.
+  - **🎵 Music only** — reading-speed pacing.
+
+  The same **Art style** chips as Studio/Auto also steer WHICH images are
+  fetched here (Photo/Illustration/Artwork map to Openverse's image
+  category; Abstract adds a keyword), plus an **Image theme** field
+  (default **"India"**) appended to every scene's search — e.g. "temple
+  sunrise" → "temple sunrise India". If a specific scene + style + theme
+  combination returns nothing (narrow category filters can starve results),
+  the search automatically broadens — dropping the category, then falling
+  back to the theme alone — before giving up and using a gradient
+  background, so a themed image is used whenever one exists.
+
   Music is always fetched (never reused) and ducked to 0.2 under narration.
   Image credits are shown under the player, in History, and saved to
   `output/<jobId>.credits.json`.

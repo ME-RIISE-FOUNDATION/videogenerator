@@ -3,6 +3,7 @@ import UploadQueue from './UploadQueue.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
 import VibePicker from './VibePicker.jsx';
+import ArtStylePicker from './ArtStylePicker.jsx';
 import useRenderJob from '../hooks/useRenderJob.js';
 
 /**
@@ -14,6 +15,7 @@ import useRenderJob from '../hooks/useRenderJob.js';
 export default function AutoPage() {
   const [files, setFiles] = useState([]);
   const [vibe, setVibe] = useState('dynamic');
+  const [artStyle, setArtStyle] = useState('suggested');
 
   const job = useRenderJob();
 
@@ -22,10 +24,11 @@ export default function AutoPage() {
     const formData = new FormData();
     formData.append('mode', 'auto');
     formData.append('vibe', vibe);
+    formData.append('artStyle', artStyle);
     // Append order IS the edit order — chronology reads as intentional editing.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, vibe, job]);
+  }, [files, vibe, artStyle, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -46,6 +49,13 @@ export default function AutoPage() {
           </div>
 
           <VibePicker vibe={vibe} onChange={setVibe} disabled={job.busy} />
+
+          <ArtStylePicker
+            value={artStyle}
+            onChange={setArtStyle}
+            disabled={job.busy}
+            hint="Suggested keeps the vibe's own color grade; the other options override it (Photo = natural, no grade)."
+          />
         </section>
 
         <button

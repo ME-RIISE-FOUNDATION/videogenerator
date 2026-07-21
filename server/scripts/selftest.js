@@ -17,7 +17,7 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { processJob, probeMedia, hasFilter, FFMPEG_PATH } from '../videoProcessor.js';
 import { resolveMusicTrack, markTrackUsed, getUsedTrackIds } from '../musicFetcher.js';
-import { synthNarration, wrapCaption } from '../scriptComposer.js';
+import { synthNarration, wrapCaption, buildHeadline } from '../scriptComposer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.join(__dirname, '..');
@@ -220,6 +220,33 @@ async function main() {
     scenes: [
       { duration: 4, imagePath: null, captionFile: captionA, gradient: ['0x1b2a4a', '0x0c0f1c'] },
       { duration: 4, imagePath: null, captionFile: captionB, gradient: ['0x3a1c47', '0x120a1e'] },
+    ],
+  });
+
+  // Script mode, default captions: headline (ideogram icon + short Title Case
+  // label) instead of the full paragraph — this is the fix for "the whole
+  // script showing on screen". Exercises buildHeadline() end-to-end plus the
+  // new icon+label drawtext lockup (icon layer only draws if an emoji font
+  // was found on this machine — the render must still succeed without one).
+  const headlineA = buildHeadline('The temple bells rang out over the misty mountain valley at dawn.', 0);
+  const headlineB = buildHeadline('Families gathered to celebrate Diwali with lights, sweets and fireworks.', 1);
+  const iconFileA = path.join(ASSETS_DIR, 'headline-icon-a.txt');
+  const labelFileA = path.join(ASSETS_DIR, 'headline-label-a.txt');
+  const iconFileB = path.join(ASSETS_DIR, 'headline-icon-b.txt');
+  const labelFileB = path.join(ASSETS_DIR, 'headline-label-b.txt');
+  fs.writeFileSync(iconFileA, headlineA.icon, 'utf8');
+  fs.writeFileSync(labelFileA, headlineA.label, 'utf8');
+  fs.writeFileSync(iconFileB, headlineB.icon, 'utf8');
+  fs.writeFileSync(labelFileB, headlineB.label, 'utf8');
+  console.log(`\n--- Headline captions ---\n  scene A: ${headlineA.icon} ${headlineA.label}\n  scene B: ${headlineB.icon} ${headlineB.label}`);
+  await runScenario({
+    name: 'script-headline',
+    files: [],
+    layout: 'landscape', audioMode: 'mute', title: '',
+    audioDir: AUDIO_DIR, expectedDuration: 7.5, expectAudio: true,
+    scenes: [
+      { duration: 4, imagePath: null, headlineIconFile: iconFileA, headlineLabelFile: labelFileA, gradient: ['0x1b2a4a', '0x0c0f1c'] },
+      { duration: 4, imagePath: null, headlineIconFile: iconFileB, headlineLabelFile: labelFileB, gradient: ['0x3a1c47', '0x120a1e'] },
     ],
   });
 

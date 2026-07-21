@@ -1,13 +1,14 @@
 import { useCallback, useState } from 'react';
 import UploadQueue from './UploadQueue.jsx';
 import ConfigPanel from './ConfigPanel.jsx';
+import ArtStylePicker from './ArtStylePicker.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
 import useRenderJob from '../hooks/useRenderJob.js';
 
 /**
- * The manual studio: full control over layout, audio mode, music query and
- * title. Upload order = edit order.
+ * The manual studio: full control over layout, audio mode, music query,
+ * title and art style. Upload order = edit order.
  */
 export default function StudioPage() {
   const [files, setFiles] = useState([]);
@@ -15,6 +16,7 @@ export default function StudioPage() {
   const [audioMode, setAudioMode] = useState('mute');
   const [musicQuery, setMusicQuery] = useState('');
   const [title, setTitle] = useState('');
+  const [artStyle, setArtStyle] = useState('suggested');
 
   const job = useRenderJob();
 
@@ -26,10 +28,11 @@ export default function StudioPage() {
     formData.append('audioMode', audioMode);
     formData.append('musicQuery', musicQuery);
     formData.append('title', title);
+    formData.append('artStyle', artStyle);
     // Append order IS the edit order — the server never re-sorts.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, layout, audioMode, musicQuery, title, job]);
+  }, [files, layout, audioMode, musicQuery, title, artStyle, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -50,6 +53,14 @@ export default function StudioPage() {
           onTitleChange={setTitle}
           disabled={job.busy}
         />
+        <section className="glass-card mt-4">
+          <ArtStylePicker
+            value={artStyle}
+            onChange={setArtStyle}
+            disabled={job.busy}
+            hint="Suggested renders ungraded footage as-is; the other options apply one of the app's color grades to your clips."
+          />
+        </section>
         <button
           type="button"
           onClick={handleGenerate}
