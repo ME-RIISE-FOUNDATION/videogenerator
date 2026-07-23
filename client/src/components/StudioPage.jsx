@@ -14,6 +14,7 @@ export default function StudioPage() {
   const [files, setFiles] = useState([]);
   const [layout, setLayout] = useState('landscape');
   const [audioMode, setAudioMode] = useState('mute');
+  const [reduceBackgroundMusic, setReduceBackgroundMusic] = useState(false);
   const [musicQuery, setMusicQuery] = useState('');
   const [title, setTitle] = useState('');
   const [artStyle, setArtStyle] = useState('suggested');
@@ -26,13 +27,14 @@ export default function StudioPage() {
     formData.append('mode', 'manual');
     formData.append('layout', layout);
     formData.append('audioMode', audioMode);
+    formData.append('reduceBackgroundMusic', audioMode === 'merge' && reduceBackgroundMusic ? 'true' : 'false');
     formData.append('musicQuery', musicQuery);
     formData.append('title', title);
     formData.append('artStyle', artStyle);
     // Append order IS the edit order — the server never re-sorts.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, layout, audioMode, musicQuery, title, artStyle, job]);
+  }, [files, layout, audioMode, reduceBackgroundMusic, musicQuery, title, artStyle, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -47,6 +49,8 @@ export default function StudioPage() {
           onLayoutChange={setLayout}
           audioMode={audioMode}
           onAudioModeChange={setAudioMode}
+          reduceBackgroundMusic={reduceBackgroundMusic}
+          onReduceBackgroundMusicChange={setReduceBackgroundMusic}
           musicQuery={musicQuery}
           onMusicQueryChange={setMusicQuery}
           title={title}

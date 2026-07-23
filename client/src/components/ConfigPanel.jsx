@@ -3,14 +3,18 @@
  * optional title slide text.
  *
  * @param {{layout: string, onLayoutChange: function, audioMode: string,
- *   onAudioModeChange: function, musicQuery: string, onMusicQueryChange: function,
- *   title: string, onTitleChange: function, disabled: boolean}} props
+ *   onAudioModeChange: function, reduceBackgroundMusic: boolean,
+ *   onReduceBackgroundMusicChange: function, musicQuery: string,
+ *   onMusicQueryChange: function, title: string, onTitleChange: function,
+ *   disabled: boolean}} props
  */
 export default function ConfigPanel({
   layout,
   onLayoutChange,
   audioMode,
   onAudioModeChange,
+  reduceBackgroundMusic,
+  onReduceBackgroundMusicChange,
   musicQuery,
   onMusicQueryChange,
   title,
@@ -68,6 +72,24 @@ export default function ConfigPanel({
             </label>
           ))}
         </div>
+        {audioMode === 'merge' ? (
+          <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 transition hover:border-zinc-600">
+            <input
+              type="checkbox"
+              checked={reduceBackgroundMusic}
+              disabled={disabled}
+              onChange={(e) => onReduceBackgroundMusicChange(e.target.checked)}
+              className="mt-0.5 accent-indigo-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-zinc-100">🎚 Reduce background music in clips</span>
+              <span className="block text-xs text-zinc-500">
+                Speech-favoring EQ + noise gate on each clip's own audio. Reduces music bleed-through
+                under voices — not full separation, so loud simultaneous music will still be audible.
+              </span>
+            </span>
+          </label>
+        ) : null}
       </div>
 
       <div>

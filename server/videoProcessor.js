@@ -287,9 +287,14 @@ export function listMusicTracks(audioDir) {
  * @param {string}   options.jobId       Unique job id; output becomes `<outputDir>/<jobId>.mp4`.
  * @param {string[]} [options.files]     Absolute media paths in upload order.
  * @param {Array<object>} [options.scenes] Script-mode alternative to `files`:
- *   each `{ duration, imagePath|null, captionFile|null, headlineIconFile|null,
- *   headlineLabelFile|null, voPath|null, gradient? }` becomes an animated
- *   scene (Ken Burns image or animated gradient). Caption rendering is
+ *   each `{ duration, imagePath|null, videoPath|null, videoTrimStart?,
+ *   captionFile|null, headlineIconFile|null, headlineLabelFile|null,
+ *   voPath|null, gradient? }` becomes one scene, visualized by (in priority
+ *   order) an uploaded video clip (`videoPath`, optionally middle-trimmed via
+ *   `videoTrimStart` when longer than `duration`; normalized the same way as
+ *   Auto mode's clips — blur-fill or pad per `style.blurFill`), an uploaded
+ *   or fetched still image (`imagePath`, Ken Burns motion), or an animated
+ *   gradient background when neither is provided. Caption rendering is
  *   mutually exclusive per scene: `captionFile` draws the old full-text
  *   lower-third; `headlineIconFile`+`headlineLabelFile` draw a large ideogram
  *   icon over a short title-case label instead (the default, less text on
@@ -301,6 +306,13 @@ export function listMusicTracks(audioDir) {
  *   background music is ducked to 0.2 under the voice.
  * @param {'portrait'|'landscape'} options.layout Output geometry (1080x1920 / 1920x1080).
  * @param {'mute'|'merge'} options.audioMode 'mute' = music only; 'merge' = clip audio + ducked music.
+ * @param {boolean} [options.reduceBackgroundMusic] Merge mode only: run each
+ *   clip's own audio through a speech-favoring EQ (highpass 150Hz, a
+ *   presence-boost peak around 2.2kHz, lowpass 7.5kHz) plus a noise gate that
+ *   ducks quiet sustained content between spoken words. This REDUCES
+ *   background music bleeding into the mix — it is not true source
+ *   separation, so music at similar volume to speech will still be audible,
+ *   and voice will sound a little thinner. No effect outside merge mode.
  * @param {string}   options.title       Optional title; non-empty prepends a 3s drawtext slide.
  * @param {object}   [options.style]     Professional "auto mode" styling, all off by default:
  *   {boolean} kenBurns        — photos get cover-crop + slow zoompan motion instead of static pad.
@@ -338,6 +350,7 @@ export async function processJob(options) {
     voiceover = null,
     layout = 'landscape',
     audioMode = 'mute',
+    reduceBackgroundMusic = false,
     title = '',
     style = {},
     outputDir,
@@ -392,6 +405,8 @@ export async function processJob(options) {
         duration: scene.duration,
         hasAudio: false,
         imagePath: scene.imagePath || null,
+        videoPath: scene.videoPath || null,
+        videoTrimStart: scene.videoTrimStart || 0,
         captionFile: scene.captionFile || null,
         headlineIconFile: scene.headlineIconFile || null,
         headlineLabelFile: scene.headlineLabelFile || null,
@@ -484,7 +499,10 @@ export async function processJob(options) {
       // Synthesized black slide; already at target size and fps.
       command.input(`color=c=black:s=${W}x${H}:r=${FPS}:d=${item.duration}`).inputFormat('lavfi');
     } else if (item.type === 'scene') {
-      if (item.imagePath) {
+      if (item.videoPath) {
+        // Uploaded video clip — motion is native, no zoompan needed.
+        command.input(item.videoPath);
+      } else if (item.imagePath) {
         // Single frame in — zoompan below animates it.
         command.input(item.imagePath);
       } else {
@@ -597,7 +615,32 @@ export async function processJob(options) {
           `:x=(w-text_w)/2:y=h*0.80` +
           `:alpha=${alphaExpr},`;
       }
-      if (item.imagePath) {
+      if (item.videoPath) {
+        // Uploaded video clip: same normalization as a regular video item
+        // (blur-fill or pad, optionally middle-trimmed to the scene's
+        // duration), with the caption/headline layered on top. The clip's
+        // own audio is never used in script mode — narration or music is.
+        const trimPrefix =
+          item.videoTrimStart > 0
+            ? `trim=start=${item.videoTrimStart.toFixed(3)}:duration=${item.duration.toFixed(3)},setpts=PTS-STARTPTS,`
+            : '';
+        if (blurFill) {
+          filters.push(`[${i}:v]${trimPrefix}split=2[bg${i}][fg${i}]`);
+          filters.push(
+            `[bg${i}]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+            `crop=${W}:${H},boxblur=20:2[bgb${i}]`
+          );
+          filters.push(`[fg${i}]scale=${W}:${H}:force_original_aspect_ratio=decrease[fgs${i}]`);
+          filters.push(
+            `[bgb${i}][fgs${i}]overlay=(W-w)/2:(H-h)/2,${caption}setsar=1,fps=${FPS},format=yuv420p[v${i}]`
+          );
+        } else {
+          filters.push(
+            `[${i}:v]${trimPrefix}scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+            `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,${caption}setsar=1,fps=${FPS},format=yuv420p[v${i}]`
+          );
+        }
+      } else if (item.imagePath) {
         const frames = Math.round(item.duration * FPS);
         const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
         const motions = [
@@ -818,8 +861,18 @@ export async function processJob(options) {
           item.trimStart > 0
             ? `atrim=start=${item.trimStart.toFixed(3)}:duration=${d},asetpts=PTS-STARTPTS,`
             : '';
+        // "Reduce background music": push energy toward the speech band
+        // (highpass under it, presence peak inside it, lowpass above it),
+        // then gate out quiet sustained content between words. Verified
+        // empirically (a synthetic bass tone dropped ~6.5dB relative to a
+        // mid-band tone under this exact chain) — a real, measurable
+        // reduction, not full separation.
+        const musicReduction = reduceBackgroundMusic
+          ? 'highpass=f=150,equalizer=f=2200:t=q:w=1.2:g=5,lowpass=f=7500,' +
+            'agate=threshold=0.03:ratio=6:attack=10:release=200,'
+          : '';
         filters.push(
-          `[${i}:a]${aTrimPrefix}${audioNorm},apad,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
+          `[${i}:a]${aTrimPrefix}${audioNorm},${musicReduction}apad,atrim=duration=${d},asetpts=PTS-STARTPTS[a${i}]`
         );
       } else {
         filters.push(

@@ -48,6 +48,9 @@ const VOICE_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg']);
 const VALID_LAYOUTS = new Set(['portrait', 'landscape']);
 const VALID_AUDIO_MODES = new Set(['mute', 'merge']);
 const VALID_VOICE_MODES = new Set(['voice', 'tts', 'music']);
+const SCRIPT_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
+const SCRIPT_VIDEO_EXTS = new Set(['.mp4', '.mov']);
+const DEFAULT_SCENE_CLIP_CAP = 8; // seconds, when no vibe/style cap is set
 const VALID_CAPTION_MODES = new Set(['headline', 'full', 'none']);
 
 /**
@@ -285,6 +288,11 @@ app.post(
     const vibe = Object.prototype.hasOwnProperty.call(VIBES, req.body.vibe) ? req.body.vibe : 'dynamic';
     const layout = VALID_LAYOUTS.has(req.body.layout) ? req.body.layout : 'landscape';
     const audioMode = VALID_AUDIO_MODES.has(req.body.audioMode) ? req.body.audioMode : 'mute';
+    // Manual Studio only, and only meaningful with Merge Audio Levels — see
+    // videoProcessor's reduceBackgroundMusic doc for exactly what this does
+    // (and does not do: it reduces bleed-through, it is not true separation).
+    const reduceBackgroundMusic =
+      mode === 'manual' && audioMode === 'merge' && req.body.reduceBackgroundMusic === 'true';
     const title = typeof req.body.title === 'string' ? req.body.title.slice(0, 200) : '';
     const musicQuery = typeof req.body.musicQuery === 'string' ? req.body.musicQuery.slice(0, 100) : '';
     const script = typeof req.body.script === 'string' ? req.body.script.slice(0, 8000) : '';
@@ -329,6 +337,7 @@ app.post(
         vibe,
         layout,
         audioMode,
+        reduceBackgroundMusic,
         title,
         musicQuery,
         script,
@@ -418,15 +427,16 @@ app.delete('/api/history/:jobId', (req, res) => {
  * @param {string} jobId Job identifier.
  * @param {string[]} files Absolute media paths in upload order.
  * @param {{mode: string, vibe: string, layout: string, audioMode: string,
- *   title: string, musicQuery: string, artStyle: string, imageTheme: string,
- *   captionMode: string}} config Render config.
+ *   reduceBackgroundMusic: boolean, title: string, musicQuery: string,
+ *   artStyle: string, imageTheme: string, captionMode: string}} config Render config.
  */
 async function runJob(jobId, files, config) {
   const uploadDir = path.join(UPLOADS_DIR, jobId);
   const outputFile = path.join(OUTPUT_DIR, `${jobId}.mp4`);
   console.log(
     `[job ${jobId}] starting: ${files.length} file(s), mode=${config.mode}, layout=${config.layout}, ` +
-    `audioMode=${config.audioMode}, title=${config.title ? JSON.stringify(config.title) : '(none)'}, ` +
+    `audioMode=${config.audioMode}${config.reduceBackgroundMusic ? '+reduceBackgroundMusic' : ''}, ` +
+    `title=${config.title ? JSON.stringify(config.title) : '(none)'}, ` +
     `musicQuery=${config.musicQuery ? JSON.stringify(config.musicQuery) : '(default)'}`
   );
 
@@ -530,6 +540,22 @@ async function runJob(jobId, files, config) {
         voiceoverOpt = { mode: 'file', path: config.voicePath };
       }
 
+      // Optional per-scene media: any photos/clips uploaded alongside the
+      // script are mapped 1:1 onto scenes in order (the file uploaded first
+      // covers scene 1, and so on) and used INSTEAD of an auto-fetched
+      // visual for that scene. Scenes beyond the uploaded count still
+      // auto-fetch exactly as before — uploading is entirely optional, and
+      // you can upload fewer files than scenes to cover just the ones that
+      // matter to you.
+      const uploadedForScene = files.slice(0, sceneMeta.length);
+      if (files.length > sceneMeta.length) {
+        broadcast(jobId, 'warning', {
+          message:
+            `${files.length - sceneMeta.length} uploaded file(s) had no matching scene and were ` +
+            'ignored — add more blank-line paragraphs to your script to use them.',
+        });
+      }
+
       // Visuals + on-screen text per scene. Captions are NOT the full script
       // by default — that was too much text on screen. The default is a
       // short headline (2–3 keywords, Title Case) under a large ideogram
@@ -538,16 +564,59 @@ async function runJob(jobId, files, config) {
       // complete scene text regardless of what's shown on screen.
       const wrapChars = config.layout === 'portrait' ? 24 : 34;
       scenesConfig = [];
+      let gradientFallbackCount = 0;
       for (let i = 0; i < sceneMeta.length; i++) {
-        broadcast(jobId, 'progress', { percent: 0, stage: `Fetching visuals (${i + 1}/${sceneMeta.length})` });
-        const image = await fetchSceneImage({
-          query: extractKeywords(sceneMeta[i].text),
-          destDir: uploadDir,
-          index: i,
-          style: config.artStyle,
-          theme: config.imageTheme,
-        });
-        if (image) imageCredits.push(image.attribution);
+        const uploadedPath = uploadedForScene[i] || null;
+        const uploadedExt = uploadedPath ? path.extname(uploadedPath).toLowerCase() : '';
+
+        let imagePath = null;
+        let videoPath = null;
+        let videoTrimStart = 0;
+        let sceneDuration = sceneMeta[i].duration;
+
+        if (uploadedPath && SCRIPT_IMAGE_EXTS.has(uploadedExt)) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Using uploaded photo (${i + 1}/${sceneMeta.length})` });
+          imagePath = uploadedPath;
+        } else if (uploadedPath && SCRIPT_VIDEO_EXTS.has(uploadedExt)) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Using uploaded video (${i + 1}/${sceneMeta.length})` });
+          try {
+            const meta = await probeMedia(uploadedPath);
+            if (!meta.duration || meta.duration < 0.2) throw new Error('no usable duration');
+            const cap = style.maxClipSeconds > 0 ? style.maxClipSeconds : DEFAULT_SCENE_CLIP_CAP;
+            if (meta.duration > cap) {
+              videoTrimStart = (meta.duration - cap) / 2;
+              sceneDuration = cap;
+            } else {
+              sceneDuration = meta.duration;
+            }
+            videoPath = uploadedPath;
+          } catch (err) {
+            broadcast(jobId, 'warning', {
+              message: `Scene ${i + 1}: uploaded video unreadable (${err.message}) — using an auto-fetched visual instead.`,
+            });
+          }
+        } else if (uploadedPath) {
+          broadcast(jobId, 'warning', {
+            message: `Scene ${i + 1}: "${path.basename(uploadedPath)}" is not a supported photo/video — using an auto-fetched visual instead.`,
+          });
+        }
+
+        if (!imagePath && !videoPath) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Fetching visuals (${i + 1}/${sceneMeta.length})` });
+          const image = await fetchSceneImage({
+            query: extractKeywords(sceneMeta[i].text),
+            destDir: uploadDir,
+            index: i,
+            style: config.artStyle,
+            theme: config.imageTheme,
+          });
+          if (image) {
+            imageCredits.push(image.attribution);
+            imagePath = image.path;
+          } else {
+            gradientFallbackCount++;
+          }
+        }
 
         let captionFile = null;
         let headlineIconFile = null;
@@ -566,8 +635,10 @@ async function runJob(jobId, files, config) {
         // as a pure visual with no on-screen text.
 
         scenesConfig.push({
-          duration: sceneMeta[i].duration,
-          imagePath: image ? image.path : null,
+          duration: sceneDuration,
+          imagePath,
+          videoPath,
+          videoTrimStart,
           captionFile,
           headlineIconFile,
           headlineLabelFile,
@@ -575,12 +646,16 @@ async function runJob(jobId, files, config) {
           gradient: SCENE_GRADIENTS[i % SCENE_GRADIENTS.length],
         });
       }
-      if (imageCredits.length === 0) {
-        broadcast(jobId, 'warning', { message: 'No online images found — using animated gradient backgrounds.' });
+      if (gradientFallbackCount > 0) {
+        broadcast(jobId, 'warning', {
+          message: `${gradientFallbackCount} scene(s) had no image available (upload or online) — using animated gradient backgrounds for ${gradientFallbackCount === 1 ? 'it' : 'them'}.`,
+        });
       }
+      const uploadedCount = uploadedForScene.filter(Boolean).length;
       console.log(
         `[job ${jobId}] script decisions: scenes=${scenesConfig.length}, narration=${voiceMode}, ` +
-        `images=${imageCredits.length}, layout=${config.layout}, vibe=${config.vibe}, ` +
+        `uploaded=${uploadedCount}, fetched=${imageCredits.length}, gradient=${gradientFallbackCount}, ` +
+        `layout=${config.layout}, vibe=${config.vibe}, ` +
         `look=${style.look || 'none'} (artStyle=${config.artStyle}), theme=${JSON.stringify(config.imageTheme)}, ` +
         `captions=${config.captionMode}` +
         (config.title ? `, title=${JSON.stringify(config.title)}` : '')
@@ -609,6 +684,7 @@ async function runJob(jobId, files, config) {
       voiceover: voiceoverOpt,
       layout: config.layout,
       audioMode: config.audioMode,
+      reduceBackgroundMusic: config.reduceBackgroundMusic,
       title: config.title,
       style,
       outputDir: OUTPUT_DIR,

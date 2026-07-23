@@ -10,9 +10,17 @@ let nextId = 1;
  * every tile carries a numbered badge, and items can be removed before submit.
  *
  * @param {{files: Array<{id: number, file: File, previewUrl: string, kind: string}>,
- *   onChange: function, disabled: boolean}} props
+ *   onChange: function, disabled: boolean, title?: string, orderHint?: string,
+ *   footer?: import('react').ReactNode}} props
  */
-export default function UploadQueue({ files, onChange, disabled }) {
+export default function UploadQueue({
+  files,
+  onChange,
+  disabled,
+  title = 'Upload queue',
+  orderHint = 'Order below = edit order',
+  footer = null,
+}) {
   const inputRef = useRef(null);
   const [dragActive, setDragActive] = useState(false);
   const filesRef = useRef(files);
@@ -66,8 +74,8 @@ export default function UploadQueue({ files, onChange, disabled }) {
   return (
     <section className="glass-card">
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Upload queue</h2>
-        <span className="text-xs text-zinc-500">Order below = edit order</span>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">{title}</h2>
+        <span className="text-xs text-zinc-500">{orderHint}</span>
       </div>
 
       <div
@@ -155,6 +163,7 @@ export default function UploadQueue({ files, onChange, disabled }) {
       ) : (
         <p className="mt-3 text-center text-xs text-zinc-600">Nothing queued yet.</p>
       )}
+      {footer}
     </section>
   );
 }

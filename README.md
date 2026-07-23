@@ -48,7 +48,9 @@ Open http://localhost:5173. Four pages, switched by the header tabs:
 - **Studio** (`#/`) — full manual control: drag in photos/clips (**the queue
   order is the edit order**, numbered badges), pick layout and audio mode,
   optionally set a music mood/genre and a title (adds a 3s title slide), hit
-  *Generate*.
+  *Generate*. When **Merge Audio Levels** is selected, a **🎚 Reduce
+  background music in clips** checkbox appears — see "Cleaning up background
+  music" below.
 - **✨ Auto Generator** (`#/auto`) — one-click professional mode: drop media,
   pick a vibe, click once. The system decides everything: layout from the
   majority orientation of your media; **Ken Burns motion** on photos (zooms
@@ -72,10 +74,17 @@ Open http://localhost:5173. Four pages, switched by the header tabs:
 
 - **📜 Script to Video** (`#/script`) — paste a script and get a finished
   video. Blank-line paragraphs become scenes (short first line = title
-  slide, up to 20 scenes). For every scene the app extracts keywords and
-  fetches a matching **CC image from Openverse** (animated gradient fallback
-  when offline or when nothing usable is found), applies Ken Burns motion,
-  and overlays on-screen text — **Captions**, chosen per render:
+  slide, up to 20 scenes). An **optional upload queue** lets you supply your
+  own photos/clips — the first upload covers scene 1, the second covers
+  scene 2, and so on; upload fewer than you have scenes and the rest are
+  found automatically, or upload nothing at all and every scene is
+  auto-fetched. Uploaded videos are middle-trimmed to the vibe's clip cap
+  (same pacing as Auto mode) and normalized (blur-fill/pad) just like
+  Studio/Auto clips; uploaded photos get the same Ken Burns motion as a
+  fetched image. For any scene without an upload, the app extracts keywords
+  and fetches a matching **CC image from Openverse** (animated gradient
+  fallback when offline or when nothing usable is found), applies Ken Burns
+  motion, and overlays on-screen text — **Captions**, chosen per render:
   - **🔤 Headline + icon (default)** — a large ideogram icon (matched from an
     India-aware keyword→emoji map, e.g. temple 🛕, diwali 🪔, monsoon 🌧,
     cricket 🏏) over a short 2–3 word Title Case headline. NOT the full
@@ -148,6 +157,33 @@ Fetched tracks are Creative Commons (mostly CC BY / BY-SA): the app shows
 "Music: <title> by <creator> (<license>)" with a source link after rendering,
 and the same attribution object is included in the Socket.io `complete` event.
 **Credit the artist if you publish the video.**
+
+### Cleaning up background music from clip audio
+
+Studio's **Merge Audio Levels** mode (the one place original clip audio is
+used) has an optional **🎚 Reduce background music in clips** checkbox. Read
+this before expecting studio-quality vocal isolation:
+
+- **What it actually does:** genuinely removing background music while
+  keeping only speech is a hard, real signal-processing problem (source
+  separation) — there is no FFmpeg filter that does it, and true separation
+  needs a trained ML model. This toggle is a lighter, honest heuristic: each
+  clip's own audio is run through a speech-favoring EQ (`highpass` under
+  150Hz, a presence boost around 2.2kHz, `lowpass` above 7.5kHz) plus a noise
+  gate that ducks quiet sustained content between spoken words.
+- **What it reduces, not removes:** music that's quieter than or similar in
+  spectral shape to nearby speech gets pushed down noticeably — measured at
+  roughly a 7dB relative improvement toward the voice band in testing. Music
+  playing at a similar volume to the speaker, or sharing the same frequency
+  range, will still bleed through, and voice can sound a little thinner since
+  this is EQ/gating, not separation.
+- **Where it applies:** only Studio, only when Merge Audio Levels is
+  selected — Auto mode and Script mode never use a clip's own audio at all
+  (they're always music/narration-only), so the toggle has no effect there.
+- A genuine source-separation upgrade (e.g. a Python ML tool like Demucs) is
+  possible later but needs a much heavier dependency than this app currently
+  carries — see the code comments in `videoProcessor.js` if you want to
+  explore that path.
 
 ## Headless self-test
 

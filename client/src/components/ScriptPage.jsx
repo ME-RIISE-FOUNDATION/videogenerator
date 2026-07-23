@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import UploadQueue from './UploadQueue.jsx';
 import VibePicker from './VibePicker.jsx';
 import ArtStylePicker from './ArtStylePicker.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
@@ -48,6 +49,7 @@ const CAPTION_MODES = [
  */
 export default function ScriptPage() {
   const [script, setScript] = useState('');
+  const [files, setFiles] = useState([]);
   const [vibe, setVibe] = useState('cinematic');
   const [layout, setLayout] = useState('landscape');
   const [voiceMode, setVoiceMode] = useState('tts');
@@ -75,8 +77,13 @@ export default function ScriptPage() {
     if (voiceMode === 'voice' && voiceFile) {
       formData.append('voice', voiceFile, voiceFile.name);
     }
+    // Optional: the first uploaded item covers scene 1, the second covers
+    // scene 2, and so on — upload order IS scene order, same convention as
+    // the Studio/Auto queues. Scenes beyond the uploaded count still
+    // auto-fetch their own visual.
+    files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [canGenerate, script, vibe, layout, voiceMode, voiceFile, artStyle, imageTheme, captionMode, job]);
+  }, [canGenerate, script, files, vibe, layout, voiceMode, voiceFile, artStyle, imageTheme, captionMode, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -106,6 +113,21 @@ export default function ScriptPage() {
             speaks the full scene text regardless of what's shown.
           </p>
         </section>
+
+        <UploadQueue
+          files={files}
+          onChange={setFiles}
+          disabled={job.busy}
+          title="Your own photos/clips (optional)"
+          orderHint="Order below = scene order"
+          footer={
+            <p className="mt-3 text-[11px] leading-snug text-zinc-600">
+              Uploads here replace the auto-fetched visual for that scene — the first upload
+              covers scene 1, the second covers scene 2, and so on. Leave empty, or upload fewer
+              than you have scenes, and the rest are found online automatically.
+            </p>
+          }
+        />
 
         <JobStatusPanels job={job} onRetry={job.reset} />
       </main>

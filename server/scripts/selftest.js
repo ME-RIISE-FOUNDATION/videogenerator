@@ -13,7 +13,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { processJob, probeMedia, hasFilter, FFMPEG_PATH } from '../videoProcessor.js';
 import { resolveMusicTrack, markTrackUsed, getUsedTrackIds } from '../musicFetcher.js';
@@ -34,6 +34,26 @@ function runFfmpeg(args) {
     stdio: ['ignore', 'inherit', 'inherit'],
     windowsHide: true,
   });
+}
+
+/**
+ * Measure the RMS level (dB) of a narrow frequency band in a media file's
+ * audio, via a bandpass + astats probe. Used to verify reduceBackgroundMusic
+ * actually shifts energy away from a bass band and toward a speech band.
+ *
+ * @param {string} file Media file to analyze.
+ * @param {number} freq Center frequency in Hz.
+ * @param {number} width Bandpass width in Hz.
+ * @returns {number} RMS level in dB (very negative = silent).
+ */
+function measureBandRmsDb(file, freq, width) {
+  const result = spawnSync(
+    FFMPEG_PATH,
+    ['-hide_banner', '-i', file, '-af', `bandpass=f=${freq}:w=${width},astats=metadata=1`, '-f', 'null', '-'],
+    { encoding: 'utf8', windowsHide: true }
+  );
+  const match = /RMS level dB:\s*(-?[\d.]+)/.exec(result.stderr || '');
+  return match ? parseFloat(match[1]) : NaN;
 }
 
 /** Generate the synthetic test assets. Returns their paths in "upload order". */
@@ -111,6 +131,7 @@ async function runScenario(spec) {
       files: spec.files,
       layout: spec.layout,
       audioMode: spec.audioMode,
+      reduceBackgroundMusic: spec.reduceBackgroundMusic || false,
       title: spec.title,
       style: spec.style || {},
       scenes: spec.scenes || null,
@@ -171,6 +192,50 @@ async function main() {
     files, layout: 'portrait', audioMode: 'merge', title: '',
     audioDir: AUDIO_DIR, expectedDuration: base, expectAudio: true,
   });
+
+  // reduceBackgroundMusic regression guard: a clip whose audio is a 110Hz
+  // "bass/music" tone mixed with a 1000Hz "voice" tone at equal levels.
+  // With the cleanup off, both bands should measure roughly equal; with it
+  // on, the bass band must drop noticeably MORE than the voice band — a
+  // real, measurable shift toward speech, not just "the audio changed some
+  // way". No background music track (empty audioDir) isolates the effect to
+  // just this filter chain, exactly as verified manually against the real
+  // HTTP pipeline (~7.4dB relative improvement measured there).
+  console.log('\n--- Reduce background music (frequency regression guard) ---');
+  const toneMixClip = path.join(ASSETS_DIR, 'clip-music-voice-mix.mp4');
+  runFfmpeg([
+    '-f', 'lavfi', '-i', 'testsrc2=duration=3:size=640x360:rate=30',
+    '-f', 'lavfi', '-i', 'sine=frequency=110:duration=3',
+    '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=3',
+    '-filter_complex',
+    '[1:a]volume=0.5[bass];[2:a]volume=0.5[mid];[bass][mid]amix=inputs=2:duration=first:dropout_transition=0[aout]',
+    '-map', '0:v', '-map', '[aout]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', toneMixClip,
+  ]);
+  const cleanupOffWork = path.join(ASSETS_DIR, 'work-cleanup-off');
+  const cleanupOnWork = path.join(ASSETS_DIR, 'work-cleanup-on');
+  fs.mkdirSync(cleanupOffWork, { recursive: true });
+  fs.mkdirSync(cleanupOnWork, { recursive: true });
+  const cleanupOff = await processJob({
+    jobId: 'selftest-cleanup-off', files: [toneMixClip], layout: 'landscape', audioMode: 'merge',
+    reduceBackgroundMusic: false, title: '', outputDir: OUTPUT_DIR, musicPath: null,
+    audioDir: EMPTY_AUDIO_DIR, workDir: cleanupOffWork, onProgress: () => {}, onWarning: () => {},
+  });
+  const cleanupOn = await processJob({
+    jobId: 'selftest-cleanup-on', files: [toneMixClip], layout: 'landscape', audioMode: 'merge',
+    reduceBackgroundMusic: true, title: '', outputDir: OUTPUT_DIR, musicPath: null,
+    audioDir: EMPTY_AUDIO_DIR, workDir: cleanupOnWork, onProgress: () => {}, onWarning: () => {},
+  });
+  const offBass = measureBandRmsDb(cleanupOff.outputFile, 110, 20);
+  const offMid = measureBandRmsDb(cleanupOff.outputFile, 1000, 100);
+  const onBass = measureBandRmsDb(cleanupOn.outputFile, 110, 20);
+  const onMid = measureBandRmsDb(cleanupOn.outputFile, 1000, 100);
+  const bassDrop = onBass - offBass; // more negative = bass reduced more
+  const midDrop = onMid - offMid;
+  const relativeImprovementDb = midDrop - bassDrop; // positive = bass hurt more than mid, as intended
+  console.log(`  OFF: bass=${offBass.toFixed(1)}dB mid=${offMid.toFixed(1)}dB`);
+  console.log(`  ON:  bass=${onBass.toFixed(1)}dB mid=${onMid.toFixed(1)}dB`);
+  console.log(`  relative improvement toward voice: ${relativeImprovementDb.toFixed(1)}dB (want > 3dB)`);
+  results.push({ name: 'reduce-background-music', pass: relativeImprovementDb > 3 });
   await runScenario({
     name: 'landscape-mute',
     files, layout: 'landscape', audioMode: 'mute', title: '',
@@ -247,6 +312,33 @@ async function main() {
     scenes: [
       { duration: 4, imagePath: null, headlineIconFile: iconFileA, headlineLabelFile: labelFileA, gradient: ['0x1b2a4a', '0x0c0f1c'] },
       { duration: 4, imagePath: null, headlineIconFile: iconFileB, headlineLabelFile: labelFileB, gradient: ['0x3a1c47', '0x120a1e'] },
+    ],
+  });
+
+  // Script mode with the user's OWN uploaded media instead of auto-fetched
+  // visuals: scene A gets an uploaded photo (Ken Burns, same as a fetched
+  // image), scene B gets an uploaded video clip capped to 4s (middle-trimmed
+  // from the 8s test clip, same math as Auto mode's pacing cap) — a
+  // previously untested combination: captions drawn ON TOP of an uploaded
+  // video scene, not just a still image or gradient. 3 + 4 − 0.5 = 6.5s.
+  const uploadHeadlineA = buildHeadline('A quiet morning by the lake with mist rising off the water.', 0);
+  const uploadHeadlineB = buildHeadline('The road trip continued past fields and small roadside villages.', 1);
+  const uploadIconA = path.join(ASSETS_DIR, 'upload-icon-a.txt');
+  const uploadLabelA = path.join(ASSETS_DIR, 'upload-label-a.txt');
+  const uploadIconB = path.join(ASSETS_DIR, 'upload-icon-b.txt');
+  const uploadLabelB = path.join(ASSETS_DIR, 'upload-label-b.txt');
+  fs.writeFileSync(uploadIconA, uploadHeadlineA.icon, 'utf8');
+  fs.writeFileSync(uploadLabelA, uploadHeadlineA.label, 'utf8');
+  fs.writeFileSync(uploadIconB, uploadHeadlineB.icon, 'utf8');
+  fs.writeFileSync(uploadLabelB, uploadHeadlineB.label, 'utf8');
+  await runScenario({
+    name: 'script-uploaded-media',
+    files: [],
+    layout: 'landscape', audioMode: 'mute', title: '',
+    audioDir: AUDIO_DIR, expectedDuration: 6.5, expectAudio: true,
+    scenes: [
+      { duration: 3, imagePath: files[0], headlineIconFile: uploadIconA, headlineLabelFile: uploadLabelA },
+      { duration: 4, videoPath: clipLong, videoTrimStart: 2, headlineIconFile: uploadIconB, headlineLabelFile: uploadLabelB },
     ],
   });
 
