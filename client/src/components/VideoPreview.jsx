@@ -10,6 +10,8 @@
  */
 export default function VideoPreview({ url, attribution, imageCredits, onStartOver }) {
   const fileName = url.split('/').pop();
+  // Ensure URL is absolute (handle both relative and absolute paths)
+  const videoUrl = url.startsWith('http') ? url : `http://localhost:5000${url}`;
   return (
     <section className="animate-fade-in-up rounded-2xl border border-emerald-500/25 bg-emerald-950/25 p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
       <div className="mb-3 flex items-center justify-between">
@@ -27,7 +29,7 @@ export default function VideoPreview({ url, attribution, imageCredits, onStartOv
           Start over
         </button>
       </div>
-      <video controls src={url} className="max-h-[60vh] w-full rounded-lg bg-black" />
+      <video controls src={videoUrl} className="max-h-[60vh] w-full rounded-lg bg-black" />
       {attribution ? (
         <p className="mt-2 text-[11px] leading-snug text-zinc-500">
           Music: “{attribution.title}” by {attribution.creator} ({attribution.license}) —{' '}

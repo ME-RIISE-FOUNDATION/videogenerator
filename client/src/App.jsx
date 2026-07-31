@@ -2,13 +2,19 @@ import { useEffect, useState } from 'react';
 import StudioPage from './components/StudioPage.jsx';
 import AutoPage from './components/AutoPage.jsx';
 import ScriptPage from './components/ScriptPage.jsx';
+import NewsPage from './components/NewsPage.jsx';
+import AvatarNewsPage from './components/AvatarNewsPage.jsx';
+import CinematicPage from './components/CinematicPage.jsx';
 import HistoryPage from './components/HistoryPage.jsx';
 
 const SUBTITLES = {
-  studio: 'Upload photos and clips, pick a layout, and render a stitched highlight video — fully local.',
-  auto: 'Automatic mode — drop your media, pick a vibe, get a professional edit.',
-  script: 'Write it, get it — scenes, visuals, captions, narration and music, generated from your script.',
-  history: 'Every video you have generated, newest first — replay, download, or delete.',
+  studio: 'Upload photos and clips, pick a layout, and render a stitched highlight video - fully local.',
+  auto: 'Automatic mode - drop your media, pick a vibe, get a professional edit.',
+  script: 'Write it, get it - scenes, visuals, captions, narration and music, generated from your script.',
+  news: 'A news anchor reads headlines - type them yourself or fetch todays top news with one click, then add narration.',
+  'avatar-news': 'Select an avatar presenter, choose video duration, and create a personalized news video - with auto headline fetching.',
+  cinematic: 'Ultra-premium 9:16 travel reels - upload clips, fast-paced cuts synced to music, cinematic color grading, luxury commercial feel.',
+  history: 'Every video you have generated, newest first - replay, download, or delete.',
 };
 
 /**
@@ -29,9 +35,15 @@ export default function App() {
     ? 'auto'
     : hash.startsWith('#/script')
       ? 'script'
-      : hash.startsWith('#/history')
-        ? 'history'
-        : 'studio';
+      : hash.startsWith('#/avatar-news')
+        ? 'avatar-news'
+        : hash.startsWith('#/news')
+          ? 'news'
+          : hash.startsWith('#/cinematic')
+            ? 'cinematic'
+            : hash.startsWith('#/history')
+              ? 'history'
+              : 'studio';
 
   const tabClass = (active) =>
     `rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-300 ${
@@ -67,6 +79,15 @@ export default function App() {
               <a href="#/script" className={tabClass(route === 'script')}>
                 📜 Script
               </a>
+              <a href="#/news" className={tabClass(route === 'news')}>
+                📰 News
+              </a>
+              <a href="#/avatar-news" className={tabClass(route === 'avatar-news')}>
+                📺 Avatar
+              </a>
+              <a href="#/cinematic" className={tabClass(route === 'cinematic')}>
+                🎬 Cinematic
+              </a>
               <a href="#/history" className={tabClass(route === 'history')}>
                 📼 History
               </a>
@@ -80,6 +101,12 @@ export default function App() {
             <AutoPage />
           ) : route === 'script' ? (
             <ScriptPage />
+          ) : route === 'news' ? (
+            <NewsPage />
+          ) : route === 'avatar-news' ? (
+            <AvatarNewsPage />
+          ) : route === 'cinematic' ? (
+            <CinematicPage />
           ) : route === 'history' ? (
             <HistoryPage />
           ) : (

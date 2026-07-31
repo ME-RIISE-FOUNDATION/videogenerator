@@ -34,6 +34,9 @@ import {
   buildHeadline,
   readingDuration,
 } from './scriptComposer.js';
+import { fetchNewsScript } from './newsFetcher.js';
+import { composeCinematicReel } from './cinematicComposer.js';
+import { getColorGradeFilter } from './colorGradePresets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,14 +45,23 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const AUDIO_DIR = path.join(__dirname, 'public', 'audio');
 const MUSIC_CACHE_DIR = path.join(__dirname, 'cache', 'music');
+const ANCHOR_IMAGE_PATH = path.join(__dirname, 'assets', 'anchor.jpg');
+const NEWS_VIBE = 'cinematic';
+const AVATAR_IMAGES_DIR = path.join(__dirname, 'assets', 'avatars');
+const AVATAR_MODE_VIBE = 'cinematic';
+const VALID_AVATAR_IDS = new Set(['avatar1', 'avatar2', 'avatar3', 'avatar4', 'avatar5']);
+const VALID_TARGET_DURATIONS = new Set([15, 30, 45, 60]);
+const MIN_SCENE_DURATION = 2; // seconds
+const VALID_PACING = new Set(['frenzy', 'fast', 'balanced']);
+const VALID_COLOR_GRADES = new Set(['subtle', 'cinematic', 'ultra']);
 
-const ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.mp4', '.mov']);
-const VOICE_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg']);
+const ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.mp4', '.mov', '.webm', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg', '.3gp', '.ogv', '.ts', '.m2ts', '.mts']);
+const VOICE_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma', '.opus']);
 const VALID_LAYOUTS = new Set(['portrait', 'landscape']);
 const VALID_AUDIO_MODES = new Set(['mute', 'merge']);
 const VALID_VOICE_MODES = new Set(['voice', 'tts', 'music']);
-const SCRIPT_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
-const SCRIPT_VIDEO_EXTS = new Set(['.mp4', '.mov']);
+const SCRIPT_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff']);
+const SCRIPT_VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg', '.3gp', '.ogv', '.ts', '.m2ts', '.mts']);
 const DEFAULT_SCENE_CLIP_CAP = 8; // seconds, when no vibe/style cap is set
 const VALID_CAPTION_MODES = new Set(['headline', 'full', 'none']);
 
@@ -272,7 +284,13 @@ app.post(
   '/api/generate',
   createJobContext,
   (req, res, next) => {
-    upload.fields([{ name: 'files', maxCount: 500 }, { name: 'voice', maxCount: 1 }])(req, res, (err) => {
+    upload.fields([
+      { name: 'files', maxCount: 500 },
+      { name: 'voice', maxCount: 1 },
+      { name: 'anchorImage', maxCount: 1 },
+      { name: 'clips', maxCount: 50 },
+      { name: 'music', maxCount: 1 },
+    ])(req, res, (err) => {
       if (err) {
         removeDirQuiet(req.uploadDir);
         return res.status(400).json({ error: err.message });
@@ -283,10 +301,14 @@ app.post(
   (req, res) => {
     const mediaFiles = (req.files && req.files.files) || [];
     const voiceFile = req.files && req.files.voice ? req.files.voice[0] : null;
+    const anchorImageFile = req.files && req.files.anchorImage ? req.files.anchorImage[0] : null;
+    const clipFiles = (req.files && req.files.clips) || [];
+    const musicFile = req.files && req.files.music ? req.files.music[0] : null;
 
-    const mode = req.body.mode === 'auto' ? 'auto' : req.body.mode === 'script' ? 'script' : 'manual';
+    const mode = req.body.mode === 'auto' ? 'auto' : req.body.mode === 'script' ? 'script' : req.body.mode === 'news' ? 'news' : req.body.mode === 'avatar' ? 'avatar' : req.body.mode === 'cinematic' ? 'cinematic' : 'manual';
     const vibe = Object.prototype.hasOwnProperty.call(VIBES, req.body.vibe) ? req.body.vibe : 'dynamic';
     const layout = VALID_LAYOUTS.has(req.body.layout) ? req.body.layout : 'landscape';
+    const autoLayout = req.body.autoLayout === 'portrait' ? 'portrait' : req.body.autoLayout === 'landscape' ? 'landscape' : 'auto';
     const audioMode = VALID_AUDIO_MODES.has(req.body.audioMode) ? req.body.audioMode : 'mute';
     // Manual Studio only, and only meaningful with Merge Audio Levels — see
     // videoProcessor's reduceBackgroundMusic doc for exactly what this does
@@ -296,10 +318,25 @@ app.post(
     const title = typeof req.body.title === 'string' ? req.body.title.slice(0, 200) : '';
     const musicQuery = typeof req.body.musicQuery === 'string' ? req.body.musicQuery.slice(0, 100) : '';
     const script = typeof req.body.script === 'string' ? req.body.script.slice(0, 8000) : '';
-    const voiceMode = VALID_VOICE_MODES.has(req.body.voiceMode) ? req.body.voiceMode : 'music';
+    const newsMode = req.body.newsMode === 'auto' ? 'auto' : 'manual';
+    const newsTopic = typeof req.body.newsTopic === 'string' ? req.body.newsTopic.slice(0, 150) : '';
+    const avatarId = VALID_AVATAR_IDS.has(req.body.avatarId) ? req.body.avatarId : 'avatar1';
+    const targetDuration = VALID_TARGET_DURATIONS.has(parseInt(req.body.targetDuration))
+      ? parseInt(req.body.targetDuration)
+      : (Number.isInteger(parseInt(req.body.customDuration)) &&
+        parseInt(req.body.customDuration) >= 15 &&
+        parseInt(req.body.customDuration) <= 300
+        ? parseInt(req.body.customDuration)
+        : 45);
+    const voiceMode = VALID_VOICE_MODES.has(req.body.voiceMode)
+      ? req.body.voiceMode
+      : (mode === 'news' || mode === 'avatar' ? 'tts' : 'music');
     const artStyle = ART_STYLES.has(req.body.artStyle) ? req.body.artStyle : 'suggested';
     const imageTheme = typeof req.body.imageTheme === 'string' ? req.body.imageTheme.slice(0, 100) : 'India';
     const captionMode = VALID_CAPTION_MODES.has(req.body.captionMode) ? req.body.captionMode : 'headline';
+    const pacing = VALID_PACING.has(req.body.pacing) ? req.body.pacing : 'fast';
+    const colorGrade = VALID_COLOR_GRADES.has(req.body.colorGrade) ? req.body.colorGrade : 'cinematic';
+    const durationTarget = parseInt(req.body.durationTarget) || 25;
 
     if (mode === 'script') {
       if (!script.trim()) {
@@ -309,6 +346,38 @@ app.post(
       if (voiceMode === 'voice' && !voiceFile) {
         removeDirQuiet(req.uploadDir);
         return res.status(400).json({ error: 'Narration is set to "my voice" but no voice file was uploaded.' });
+      }
+    } else if (mode === 'news') {
+      if (!anchorImageFile) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'Please upload a news anchor image.' });
+      }
+      if (newsMode === 'manual' && !script.trim()) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'The news script is empty. Paste some text, or switch to Auto and fetch headlines.' });
+      }
+      if (voiceMode === 'voice' && !voiceFile) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'Narration is set to "my voice" but no voice file was uploaded.' });
+      }
+    } else if (mode === 'avatar') {
+      const avatarPath = path.join(AVATAR_IMAGES_DIR, `${avatarId}.jpg`);
+      if (!fs.existsSync(avatarPath)) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: `Avatar ${avatarId} not found. Add image to server/assets/avatars/.` });
+      }
+      if (newsMode === 'manual' && !script.trim()) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'The script is empty. Paste some text, or switch to Auto and fetch headlines.' });
+      }
+      if (voiceMode === 'voice' && !voiceFile) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'Narration is set to "my voice" but no voice file was uploaded.' });
+      }
+    } else if (mode === 'cinematic') {
+      if (clipFiles.length < 2) {
+        removeDirQuiet(req.uploadDir);
+        return res.status(400).json({ error: 'Cinematic mode requires at least 2 video clips.' });
       }
     } else if (mediaFiles.length === 0) {
       removeDirQuiet(req.uploadDir);
@@ -331,6 +400,7 @@ app.post(
     res.json({ jobId });
 
     const orderedFiles = mediaFiles.map((f) => f.path);
+    const clipPaths = clipFiles.map((f) => f.path);
     setImmediate(() =>
       runJob(jobId, orderedFiles, {
         mode,
@@ -346,6 +416,17 @@ app.post(
         artStyle,
         imageTheme,
         captionMode,
+        newsMode,
+        newsTopic,
+        anchorImagePath: anchorImageFile ? anchorImageFile.path : null,
+        avatarId,
+        targetDuration,
+        autoLayout,
+        clips: clipPaths,
+        musicPath: musicFile ? musicFile.path : null,
+        pacing,
+        colorGrade,
+        durationTarget,
       })
     );
   }
@@ -458,15 +539,19 @@ async function runJob(jobId, files, config) {
         } catch { /* unreadable file — the processor will warn and skip it */ }
       }
       const vibe = VIBES[config.vibe];
-      config.layout = portraitVotes > landscapeVotes ? 'portrait' : 'landscape';
+      if (config.autoLayout === 'auto') {
+        config.layout = portraitVotes > landscapeVotes ? 'portrait' : 'landscape';
+      } else {
+        config.layout = config.autoLayout;
+      }
       config.audioMode = 'mute';
       config.musicQuery = vibe.musicQuery;
       style = { ...AUTO_STYLE, ...vibe.style };
       applyArtStyleLook(style, config.artStyle);
       console.log(
         `[job ${jobId}] auto decisions: layout=${config.layout} ` +
-        `(${portraitVotes}P/${landscapeVotes}L), vibe=${config.vibe}, ` +
-        `look=${style.look || 'none'} (artStyle=${config.artStyle}), ` +
+        `${config.autoLayout === 'auto' ? `(detected ${portraitVotes}P/${landscapeVotes}L)` : `(user selected ${config.autoLayout})`}, ` +
+        `vibe=${config.vibe}, look=${style.look || 'none'} (artStyle=${config.artStyle}), ` +
         `clip cap=${vibe.style.maxClipSeconds}s, xfade=${vibe.style.transitionDuration}s, ` +
         `music="${vibe.musicQuery}"`
       );
@@ -660,16 +745,286 @@ async function runJob(jobId, files, config) {
         `captions=${config.captionMode}` +
         (config.title ? `, title=${JSON.stringify(config.title)}` : '')
       );
+    } else if (config.mode === 'news') {
+      broadcast(jobId, 'progress', { percent: 0, stage: 'Writing scenes' });
+
+      let scriptText = config.script;
+      if (config.newsMode === 'auto') {
+        broadcast(jobId, 'progress', { percent: 0, stage: 'Fetching news' });
+        scriptText = await fetchNewsScript({ topic: config.newsTopic });
+      }
+
+      const parsed = parseScript(scriptText);
+      if (parsed.scenes.length === 0) throw new Error('The news script has no usable text.');
+      if (parsed.capped) {
+        broadcast(jobId, 'warning', { message: 'Long script — trimmed to the first 20 scenes.' });
+      }
+      if (!config.title && parsed.title) config.title = parsed.title;
+
+      if (!config.anchorImagePath || !fs.existsSync(config.anchorImagePath)) {
+        throw new Error('Anchor image not found or failed to upload.');
+      }
+
+      const vibe = VIBES[NEWS_VIBE];
+      config.audioMode = 'mute';
+      config.musicQuery = vibe.musicQuery;
+      style = { ...AUTO_STYLE, ...vibe.style };
+      style.kenBurns = false;
+      style.kenBurnsPan = false;
+
+      let voiceMode = config.voiceMode;
+      const sceneMeta = parsed.scenes.map((s) => ({
+        ...s,
+        duration: readingDuration(s.words),
+        voPath: null,
+      }));
+      if (voiceMode === 'tts') {
+        for (let i = 0; i < sceneMeta.length; i++) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Recording narration (${i + 1}/${sceneMeta.length})` });
+          const wav = await synthNarration({
+            text: sceneMeta[i].text,
+            wavPath: path.join(uploadDir, `narration-${i}.wav`),
+            workDir: uploadDir,
+            index: i,
+          });
+          if (wav) {
+            sceneMeta[i].voPath = wav.path;
+            sceneMeta[i].duration = Math.max(3, wav.duration + 0.8);
+          } else if (i === 0) {
+            broadcast(jobId, 'warning', { message: 'Text-to-speech unavailable — continuing with music only.' });
+            voiceMode = 'music';
+            break;
+          } else {
+            broadcast(jobId, 'warning', { message: `Narration failed for scene ${i + 1} — it will be silent.` });
+          }
+        }
+        if (voiceMode === 'tts') voiceoverOpt = { mode: 'tts' };
+      } else if (voiceMode === 'voice') {
+        const meta = await probeMedia(config.voicePath);
+        if (!meta.hasAudio || !meta.duration) {
+          throw new Error('The uploaded voice file is not readable audio.');
+        }
+        const totalWords = sceneMeta.reduce((sum, s) => sum + s.words, 0) || 1;
+        const tApprox = style.transitionDuration || 0.5;
+        const target = meta.duration + 1.5 + tApprox * (sceneMeta.length - 1);
+        sceneMeta.forEach((s) => {
+          s.duration = Math.max(2.5, (s.words / totalWords) * target);
+        });
+        voiceoverOpt = { mode: 'file', path: config.voicePath };
+      }
+
+      const wrapChars = config.layout === 'portrait' ? 24 : 34;
+      scenesConfig = [];
+      for (let i = 0; i < sceneMeta.length; i++) {
+        let captionFile = null;
+        let headlineIconFile = null;
+        let headlineLabelFile = null;
+        if (config.captionMode === 'full') {
+          captionFile = path.join(uploadDir, `caption-${i}.txt`);
+          fs.writeFileSync(captionFile, wrapCaption(sceneMeta[i].text, wrapChars), 'utf8');
+        } else if (config.captionMode === 'headline') {
+          const headline = buildHeadline(sceneMeta[i].text, i);
+          headlineIconFile = path.join(uploadDir, `headline-icon-${i}.txt`);
+          headlineLabelFile = path.join(uploadDir, `headline-label-${i}.txt`);
+          fs.writeFileSync(headlineIconFile, headline.icon, 'utf8');
+          fs.writeFileSync(headlineLabelFile, headline.label, 'utf8');
+        }
+
+        scenesConfig.push({
+          duration: sceneMeta[i].duration,
+          imagePath: config.anchorImagePath,
+          videoPath: null,
+          videoTrimStart: 0,
+          captionFile,
+          headlineIconFile,
+          headlineLabelFile,
+          voPath: sceneMeta[i].voPath,
+          gradient: SCENE_GRADIENTS[i % SCENE_GRADIENTS.length],
+        });
+      }
+      console.log(
+        `[job ${jobId}] news decisions: scenes=${scenesConfig.length}, newsMode=${config.newsMode}, ` +
+        `narration=${voiceMode}, layout=${config.layout}, captions=${config.captionMode}`
+      );
+    } else if (config.mode === 'avatar') {
+      broadcast(jobId, 'progress', { percent: 0, stage: 'Writing scenes' });
+
+      let scriptText = config.script;
+      if (config.newsMode === 'auto') {
+        broadcast(jobId, 'progress', { percent: 0, stage: 'Fetching news' });
+        scriptText = await fetchNewsScript({ topic: config.newsTopic });
+      }
+
+      const parsed = parseScript(scriptText);
+      if (parsed.scenes.length === 0) throw new Error('The script has no usable text.');
+      if (parsed.capped) {
+        broadcast(jobId, 'warning', { message: 'Long script — trimmed to the first 20 scenes.' });
+      }
+      if (!config.title && parsed.title) config.title = parsed.title;
+
+      const avatarPath = path.join(AVATAR_IMAGES_DIR, `${config.avatarId}.jpg`);
+      if (!fs.existsSync(avatarPath)) {
+        throw new Error(`Avatar ${config.avatarId} not found.`);
+      }
+
+      const vibe = VIBES[AVATAR_MODE_VIBE];
+      config.audioMode = 'mute';
+      config.musicQuery = vibe.musicQuery;
+      style = { ...AUTO_STYLE, ...vibe.style };
+      style.kenBurns = false;
+      style.kenBurnsPan = false;
+
+      let voiceMode = config.voiceMode;
+      const sceneMeta = parsed.scenes.map((s) => ({
+        ...s,
+        duration: readingDuration(s.words),
+        voPath: null,
+      }));
+
+      let sceneClipCap = Math.max(
+        Math.floor(config.targetDuration / sceneMeta.length),
+        MIN_SCENE_DURATION
+      );
+
+      if (voiceMode === 'tts') {
+        for (let i = 0; i < sceneMeta.length; i++) {
+          broadcast(jobId, 'progress', { percent: 0, stage: `Recording narration (${i + 1}/${sceneMeta.length})` });
+          const wav = await synthNarration({
+            text: sceneMeta[i].text,
+            wavPath: path.join(uploadDir, `narration-${i}.wav`),
+            workDir: uploadDir,
+            index: i,
+          });
+          if (wav) {
+            sceneMeta[i].voPath = wav.path;
+            sceneMeta[i].duration = Math.max(3, wav.duration + 0.8);
+          } else if (i === 0) {
+            broadcast(jobId, 'warning', { message: 'Text-to-speech unavailable — continuing with music only.' });
+            voiceMode = 'music';
+            break;
+          } else {
+            broadcast(jobId, 'warning', { message: `Narration failed for scene ${i + 1} — it will be silent.` });
+          }
+        }
+        if (voiceMode === 'tts') voiceoverOpt = { mode: 'tts' };
+      } else if (voiceMode === 'voice') {
+        const meta = await probeMedia(config.voicePath);
+        if (!meta.hasAudio || !meta.duration) {
+          throw new Error('The uploaded voice file is not readable audio.');
+        }
+        const totalWords = sceneMeta.reduce((sum, s) => sum + s.words, 0) || 1;
+        const tApprox = style.transitionDuration || 0.5;
+        const target = meta.duration + 1.5 + tApprox * (sceneMeta.length - 1);
+        sceneMeta.forEach((s) => {
+          s.duration = Math.max(2.5, (s.words / totalWords) * target);
+        });
+        voiceoverOpt = { mode: 'file', path: config.voicePath };
+      }
+
+      const wrapChars = config.layout === 'portrait' ? 24 : 34;
+      scenesConfig = [];
+      for (let i = 0; i < sceneMeta.length; i++) {
+        let captionFile = null;
+        let headlineIconFile = null;
+        let headlineLabelFile = null;
+        if (config.captionMode === 'full') {
+          captionFile = path.join(uploadDir, `caption-${i}.txt`);
+          fs.writeFileSync(captionFile, wrapCaption(sceneMeta[i].text, wrapChars), 'utf8');
+        } else if (config.captionMode === 'headline') {
+          const headline = buildHeadline(sceneMeta[i].text, i);
+          headlineIconFile = path.join(uploadDir, `headline-icon-${i}.txt`);
+          headlineLabelFile = path.join(uploadDir, `headline-label-${i}.txt`);
+          fs.writeFileSync(headlineIconFile, headline.icon, 'utf8');
+          fs.writeFileSync(headlineLabelFile, headline.label, 'utf8');
+        }
+
+        scenesConfig.push({
+          duration: sceneMeta[i].duration,
+          imagePath: avatarPath,
+          videoPath: null,
+          videoTrimStart: 0,
+          captionFile,
+          headlineIconFile,
+          headlineLabelFile,
+          voPath: sceneMeta[i].voPath,
+          gradient: SCENE_GRADIENTS[i % SCENE_GRADIENTS.length],
+        });
+      }
+      console.log(
+        `[job ${jobId}] avatar decisions: avatar=${config.avatarId}, scenes=${scenesConfig.length}, ` +
+        `targetDuration=${config.targetDuration}s, newsMode=${config.newsMode}, narration=${voiceMode}, ` +
+        `layout=${config.layout}, captions=${config.captionMode}`
+      );
+    } else if (config.mode === 'cinematic') {
+      broadcast(jobId, 'progress', { percent: 0, stage: 'Composing cinematic reel' });
+
+      const clipDurations = [];
+      for (const clipPath of config.clips) {
+        try {
+          const meta = await probeMedia(clipPath);
+          if (meta.duration > 0) clipDurations.push(meta.duration);
+        } catch {
+          broadcast(jobId, 'warning', { message: `Could not read clip duration, skipping: ${clipPath}` });
+        }
+      }
+
+      if (clipDurations.length < 2) {
+        throw new Error('Not enough valid video clips for cinematic mode.');
+      }
+
+      const compositionResult = await composeCinematicReel({
+        clips: config.clips.map((clipPath, idx) => ({
+          path: clipPath,
+          duration: clipDurations[idx] || 5,
+        })),
+        pacing: config.pacing,
+        durationTarget: config.durationTarget,
+        workDir: uploadDir,
+        onProgress: (msg) => broadcast(jobId, 'progress', { percent: 0, stage: msg }),
+      });
+
+      config.layout = 'portrait';
+      config.audioMode = 'mute';
+      config.title = '';
+      style = { ...AUTO_STYLE };
+      style.kenBurns = false;
+      style.kenBurnsPan = false;
+      style.colorGradeFilter = getColorGradeFilter(config.colorGrade);
+
+      scenesConfig = compositionResult.scenes.map((scene) => ({
+        duration: scene.duration,
+        imagePath: null,
+        videoPath: config.clips[scene.clipIdx],
+        videoTrimStart: scene.startTime,
+        captionFile: null,
+        headlineIconFile: null,
+        headlineLabelFile: null,
+        voPath: null,
+        gradient: SCENE_GRADIENTS[scene.clipIdx % SCENE_GRADIENTS.length],
+      }));
+
+      config.musicQuery = 'epic cinematic instrumental';
+      if (config.musicPath) {
+        music = { path: config.musicPath, id: null, attribution: null };
+      }
+
+      console.log(
+        `[job ${jobId}] cinematic decisions: clips=${config.clips.length}, scenes=${scenesConfig.length}, ` +
+        `totalDuration=${compositionResult.totalDuration.toFixed(1)}s, pacing=${config.pacing}, ` +
+        `colorGrade=${config.colorGrade}, estimatedBPM=${compositionResult.estimatedBPM}`
+      );
     }
     // Online-first music resolution (Openverse → cache → local folder → none),
     // strict no-reuse: only tracks never consumed by a finished video.
-    music = await resolveMusicTrack({
-      query: config.musicQuery,
-      audioDir: AUDIO_DIR,
-      cacheDir: MUSIC_CACHE_DIR,
-      onWarning: (message) => broadcast(jobId, 'warning', { message }),
-      onStage: (stage) => broadcast(jobId, 'progress', { percent: 0, stage }),
-    });
+    if (!music) {
+      music = await resolveMusicTrack({
+        query: config.musicQuery,
+        audioDir: AUDIO_DIR,
+        cacheDir: MUSIC_CACHE_DIR,
+        onWarning: (message) => broadcast(jobId, 'warning', { message }),
+        onStage: (stage) => broadcast(jobId, 'progress', { percent: 0, stage }),
+      });
+    }
     if (music) {
       console.log(
         `[job ${jobId}] music: ${path.basename(music.path)}` +
@@ -695,9 +1050,9 @@ async function runJob(jobId, files, config) {
       onWarning: (message) => broadcast(jobId, 'warning', { message }),
     });
 
-    // Script mode: persist the CC credits next to the video so History can
+    // Script, News, Avatar, and Cinematic modes: persist the CC credits next to the video so History can
     // show them after this process forgets the job.
-    if (config.mode === 'script') {
+    if (config.mode === 'script' || config.mode === 'news' || config.mode === 'avatar' || config.mode === 'cinematic') {
       try {
         fs.writeFileSync(
           path.join(OUTPUT_DIR, `${jobId}.credits.json`),

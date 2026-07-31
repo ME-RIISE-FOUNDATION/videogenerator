@@ -79,8 +79,8 @@ const MUSIC_DUCK_VOLUME = 0.35; // music level under clip audio in merge mode
 const VOICE_MUSIC_DUCK = 0.2; // music level under narration (script mode)
 const AUDIO_FADE_OUT = 2; // seconds of afade=t=out at the very end
 
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
-const VIDEO_EXTS = new Set(['.mp4', '.mov']);
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif']);
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg', '.3gp', '.ogv', '.ts', '.m2ts', '.mts']);
 
 /** Pool of xfade transition names, one picked at random per boundary. */
 const TRANSITIONS = [
@@ -418,9 +418,30 @@ export async function processJob(options) {
   }
   for (const filePath of useScenes ? [] : files) {
     const ext = path.extname(filePath).toLowerCase();
-    if (IMAGE_EXTS.has(ext)) {
+    let isImage = IMAGE_EXTS.has(ext);
+    let isVideo = VIDEO_EXTS.has(ext);
+
+    // If extension is unknown, probe the file to determine type
+    if (!isImage && !isVideo) {
+      try {
+        const meta = await probeMedia(filePath);
+        const videoStream = (meta.width && meta.height);
+        const audioStream = meta.hasAudio;
+        isVideo = videoStream; // Has video stream = it's a video
+        isImage = !audioStream && videoStream; // Video stream but no audio = treat as image/animation
+        if (!isVideo && !isImage) {
+          warn(`Skipped "${path.basename(filePath)}" (no video or audio streams detected)`);
+          continue;
+        }
+      } catch (err) {
+        warn(`Skipped unreadable file "${path.basename(filePath)}" (${err.message})`);
+        continue;
+      }
+    }
+
+    if (isImage) {
       items.push({ type: 'image', path: filePath, duration: IMAGE_DURATION, hasAudio: false });
-    } else if (VIDEO_EXTS.has(ext)) {
+    } else if (isVideo) {
       try {
         const meta = await probeMedia(filePath);
         if (!meta.duration || meta.duration < 0.2) {
@@ -439,8 +460,6 @@ export async function processJob(options) {
       } catch (err) {
         warn(`Skipped unreadable video "${path.basename(filePath)}" (${err.message})`);
       }
-    } else {
-      warn(`Skipped unsupported file "${path.basename(filePath)}"`);
     }
   }
 
@@ -523,6 +542,7 @@ export async function processJob(options) {
         command.input(item.path).inputOptions(['-loop', '1', '-t', String(item.duration)]);
       }
     } else {
+      // Video file.
       command.input(item.path);
     }
   });
@@ -641,20 +661,29 @@ export async function processJob(options) {
           );
         }
       } else if (item.imagePath) {
-        const frames = Math.round(item.duration * FPS);
-        const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
-        const motions = [
-          `z='min(zoom+0.0012,1.15)':${centered}`,
-          `z='if(lte(on,1),1.15,max(zoom-0.0012,1.001))':${centered}`,
-          `z='1.15':x='(iw-iw/zoom)*on/${Math.max(1, frames - 1)}':y='ih/2-(ih/zoom/2)'`,
-          `z='1.15':x='(iw-iw/zoom)*(1-on/${Math.max(1, frames - 1)})':y='ih/2-(ih/zoom/2)'`,
-        ];
-        filters.push(
-          `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,` +
-          `crop=${W * 2}:${H * 2},` +
-          `zoompan=${pickRandom(motions)}:d=${frames}:s=${W}x${H}:fps=${FPS},` +
-          `${caption}setsar=1,format=yuv420p[v${i}]`
-        );
+        if (kenBurns) {
+          // Ken Burns: cover-crop + slow zoom/pan motion (1.5x scale for memory efficiency)
+          const frames = Math.round(item.duration * FPS);
+          const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+          const motions = [
+            `z='min(zoom+0.0008,1.1)':${centered}`,
+            `z='if(lte(on,1),1.1,max(zoom-0.0008,1.001))':${centered}`,
+            `z='1.1':x='(iw-iw/zoom)*on/${Math.max(1, frames - 1)}':y='ih/2-(ih/zoom/2)'`,
+            `z='1.1':x='(iw-iw/zoom)*(1-on/${Math.max(1, frames - 1)})':y='ih/2-(ih/zoom/2)'`,
+          ];
+          filters.push(
+            `[${i}:v]scale=${Math.round(W * 1.5)}:${Math.round(H * 1.5)}:force_original_aspect_ratio=increase,` +
+            `crop=${Math.round(W * 1.5)}:${Math.round(H * 1.5)},` +
+            `zoompan=${pickRandom(motions)}:d=${frames}:s=${W}x${H}:fps=${FPS},` +
+            `${caption}setsar=1,format=yuv420p[v${i}]`
+          );
+        } else {
+          // Static pad: no zoom/pan, just scale to fit with black bars
+          filters.push(
+            `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+            `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,${caption}setsar=1,fps=${FPS},format=yuv420p[v${i}]`
+          );
+        }
       } else {
         // Gradient source is already W×H at the right fps.
         filters.push(`[${i}:v]${caption}setsar=1,format=yuv420p[v${i}]`);
@@ -666,23 +695,24 @@ export async function processJob(options) {
       // Ken Burns: cover-crop to fill the frame (no bars), then a slow zoompan
       // (random in/out per photo). The single input frame is duplicated into
       // d = duration×fps output frames, so the item is still exactly 3s.
+      // Reduced from 2x to 1.5x scaling to save memory on large frames.
       const frames = Math.round(item.duration * FPS);
       const centered = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
       // Motion pool: slow push-in, pull-out, and (when kenBurnsPan) lateral
-      // pans at a fixed 1.15 zoom driven by the output frame number `on`.
+      // pans at a fixed 1.1 zoom driven by the output frame number `on`.
       const motions = [
-        `z='min(zoom+0.0012,1.15)':${centered}`,
-        `z='if(lte(on,1),1.15,max(zoom-0.0012,1.001))':${centered}`,
+        `z='min(zoom+0.0008,1.1)':${centered}`,
+        `z='if(lte(on,1),1.1,max(zoom-0.0008,1.001))':${centered}`,
       ];
       if (kenBurnsPan) {
         motions.push(
-          `z='1.15':x='(iw-iw/zoom)*on/${frames - 1}':y='ih/2-(ih/zoom/2)'`,
-          `z='1.15':x='(iw-iw/zoom)*(1-on/${frames - 1})':y='ih/2-(ih/zoom/2)'`
+          `z='1.1':x='(iw-iw/zoom)*on/${frames - 1}':y='ih/2-(ih/zoom/2)'`,
+          `z='1.1':x='(iw-iw/zoom)*(1-on/${frames - 1})':y='ih/2-(ih/zoom/2)'`
         );
       }
       filters.push(
-        `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,` +
-        `crop=${W * 2}:${H * 2},` +
+        `[${i}:v]scale=${Math.round(W * 1.5)}:${Math.round(H * 1.5)}:force_original_aspect_ratio=increase,` +
+        `crop=${Math.round(W * 1.5)}:${Math.round(H * 1.5)},` +
         `zoompan=${pickRandom(motions)}` +
         `:d=${frames}:s=${W}x${H}:fps=${FPS},setsar=1,format=yuv420p[v${i}]`
       );

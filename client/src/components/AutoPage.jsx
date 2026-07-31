@@ -16,6 +16,7 @@ export default function AutoPage() {
   const [files, setFiles] = useState([]);
   const [vibe, setVibe] = useState('dynamic');
   const [artStyle, setArtStyle] = useState('suggested');
+  const [layout, setLayout] = useState('auto');
 
   const job = useRenderJob();
 
@@ -25,10 +26,11 @@ export default function AutoPage() {
     formData.append('mode', 'auto');
     formData.append('vibe', vibe);
     formData.append('artStyle', artStyle);
+    formData.append('autoLayout', layout);
     // Append order IS the edit order — chronology reads as intentional editing.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, vibe, artStyle, job]);
+  }, [files, vibe, artStyle, layout, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -49,6 +51,26 @@ export default function AutoPage() {
           </div>
 
           <VibePicker vibe={vibe} onChange={setVibe} disabled={job.busy} />
+
+          <div>
+            <label htmlFor="auto-layout" className="mb-1.5 block text-xs font-medium text-zinc-300">
+              Video Format
+            </label>
+            <select
+              id="auto-layout"
+              value={layout}
+              disabled={job.busy}
+              onChange={(e) => setLayout(e.target.value)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-indigo-500 disabled:opacity-50"
+            >
+              <option value="auto">Auto-detect (from your clips)</option>
+              <option value="portrait">Portrait (9:16 - phone video)</option>
+              <option value="landscape">Landscape (16:9 - wide screen)</option>
+            </select>
+            <p className="mt-1 text-[11px] text-zinc-600">
+              Auto-detect chooses based on your uploaded clips. Pick Portrait for phone-style videos, Landscape for widescreen.
+            </p>
+          </div>
 
           <ArtStylePicker
             value={artStyle}

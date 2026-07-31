@@ -61,9 +61,40 @@ export default function UploadQueue({
     [onChange]
   );
 
+  const handleDragEnter = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!disabled) setDragActive(true);
+    },
+    [disabled]
+  );
+
+  const handleDragOver = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!disabled) setDragActive(true);
+    },
+    [disabled]
+  );
+
+  const handleDragLeave = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      // Only deactivate if leaving the drop zone entirely
+      if (event.currentTarget === event.target) {
+        setDragActive(false);
+      }
+    },
+    []
+  );
+
   const handleDrop = useCallback(
     (event) => {
       event.preventDefault();
+      event.stopPropagation();
       setDragActive(false);
       if (disabled) return;
       addFiles(event.dataTransfer.files);
@@ -80,11 +111,9 @@ export default function UploadQueue({
 
       <div
         onDrop={handleDrop}
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (!disabled) setDragActive(true);
-        }}
-        onDragLeave={() => setDragActive(false)}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
         onClick={() => !disabled && inputRef.current?.click()}
         role="button"
         tabIndex={0}
