@@ -976,7 +976,7 @@ export async function processJob(options) {
       .outputOptions(outputOptions)
       .output(outputFile)
       .on('start', (commandLine) => {
-        console.log(`[job ${jobId}] ffmpeg started:\n${commandLine}`);
+        console.log(`[job ${jobId}] ffmpeg started`);
         onProgress(0, 'Rendering');
       })
       .on('progress', (progress) => {
@@ -989,6 +989,9 @@ export async function processJob(options) {
       .on('error', (err, stdout, stderr) => {
         const tail = (stderr || '').split('\n').slice(-12).join('\n');
         reject(new Error(`FFmpeg failed: ${err.message}\n--- stderr tail ---\n${tail}`));
+      })
+      .on('stderr', (stderrLine) => {
+        // Silently handle stderr to prevent crashing on warnings
       })
       .run();
   });

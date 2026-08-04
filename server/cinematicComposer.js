@@ -156,7 +156,8 @@ export async function composeCinematicReel(options) {
   if (onProgress) onProgress(`Detected ${allScenes.length} potential scene cuts...`);
 
   // Trim/expand scenes to match target duration
-  const numScenes = Math.max(1, Math.floor(durationTarget / targetCutDuration));
+  // Cap at 30 scenes to prevent FFmpeg command line from getting too long
+  const numScenes = Math.max(1, Math.min(30, Math.floor(durationTarget / targetCutDuration)));
   const selectedScenes = allScenes.slice(0, numScenes);
 
   // Adjust durations to fit exactly target duration
