@@ -40,9 +40,27 @@ import { getColorGradeFilter } from './colorGradePresets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Last-resort safety net. Node's built-in fetch (undici) can throw from an
+// INTERNAL socket event — outside any await, so no try/catch can catch it —
+// when a remote HTTPS server drops a connection mid-response (observed live:
+// `AssertionError: assert(!this.paused)` in undici's HTTP parser, which killed
+// the whole server mid-job). Individual jobs already fail gracefully via their
+// own try/catch; this keeps the process alive instead of taking the server down
+// (and every other in-flight job with it) on a transient network hiccup.
+process.on('uncaughtException', (err) => {
+  console.error(`[uncaughtException] ${err && err.stack ? err.stack : err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error(`[unhandledRejection] ${reason && reason.stack ? reason.stack : reason}`);
+});
+
 const PORT = process.env.PORT || 5000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const OUTPUT_DIR = path.join(__dirname, 'output');
+// Built frontend (produced by `npm run build` in ../client). When present, this
+// server serves the whole app on one origin — UI, /api, /output and Socket.io
+// all from the same host. Absent in dev (Vite serves the UI itself).
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 const AUDIO_DIR = path.join(__dirname, 'public', 'audio');
 const MUSIC_CACHE_DIR = path.join(__dirname, 'cache', 'music');
 const ANCHOR_IMAGE_PATH = path.join(__dirname, 'assets', 'anchor.jpg');
@@ -162,6 +180,16 @@ for (const dir of [UPLOADS_DIR, OUTPUT_DIR, AUDIO_DIR, MUSIC_CACHE_DIR]) {
 
 const app = express();
 const httpServer = http.createServer(app);
+
+// Large uploads (many / big videos) stream in over a single request that can
+// easily run longer than Node's defaults allow. Node caps a request at 5 min
+// (`requestTimeout`) and headers at 60s (`headersTimeout`); when a big multipart
+// batch exceeds that, Node aborts the socket mid-upload and the browser reports
+// a bare "Failed to fetch". Disable those caps so uploads finish at whatever
+// pace the client can manage (this is a local, single-user app).
+httpServer.requestTimeout = 0;
+httpServer.headersTimeout = 0;
+
 const io = new SocketIOServer(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
@@ -276,6 +304,13 @@ const upload = multer({
 
 // ------------------------------------------------------------------ routes
 
+// Serve the built frontend (production single-origin). Static assets first;
+// the SPA fallback for client-side routes is registered after the API routes
+// below so it can never shadow /api or /output.
+if (fs.existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST));
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, ffmpeg: FFMPEG_PATH, xfade: hasFilter('xfade') });
 });
@@ -331,6 +366,12 @@ app.post(
     const voiceMode = VALID_VOICE_MODES.has(req.body.voiceMode)
       ? req.body.voiceMode
       : (mode === 'news' || mode === 'avatar' ? 'tts' : 'music');
+    // Studio/Auto only: optional user-chosen total video length. Blank/0 = Auto
+    // (pace to content, current behavior); otherwise 15–300s.
+    const totalDuration = (() => {
+      const v = parseInt(req.body.totalDuration, 10);
+      return Number.isInteger(v) && v >= 15 && v <= 300 ? v : 0;
+    })();
     const artStyle = ART_STYLES.has(req.body.artStyle) ? req.body.artStyle : 'suggested';
     const imageTheme = typeof req.body.imageTheme === 'string' ? req.body.imageTheme.slice(0, 100) : 'India';
     const captionMode = VALID_CAPTION_MODES.has(req.body.captionMode) ? req.body.captionMode : 'headline';
@@ -410,6 +451,7 @@ app.post(
         reduceBackgroundMusic,
         title,
         musicQuery,
+        totalDuration,
         script,
         voiceMode,
         voicePath: voiceFile ? voiceFile.path : null,
@@ -498,6 +540,22 @@ app.delete('/api/history/:jobId', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: `Delete failed: ${err.message}` });
   }
+});
+
+// SPA fallback: any non-API GET returns the built index.html so client-side
+// routes work on refresh/deep-link. API, video and socket paths are excluded so
+// they keep their real handlers (and 404 properly when unmatched).
+app.get('*', (req, res, next) => {
+  if (
+    req.path.startsWith('/api') ||
+    req.path.startsWith('/output') ||
+    req.path.startsWith('/socket.io')
+  ) {
+    return next();
+  }
+  const indexFile = path.join(CLIENT_DIST, 'index.html');
+  if (fs.existsSync(indexFile)) return res.sendFile(indexFile);
+  next();
 });
 
 // -------------------------------------------------------------- job runner
@@ -1042,6 +1100,9 @@ async function runJob(jobId, files, config) {
       reduceBackgroundMusic: config.reduceBackgroundMusic,
       title: config.title,
       style,
+      // User-chosen total length only applies to file-based modes (Studio/Auto);
+      // scene-based modes size themselves to narration, so leave them alone.
+      totalDuration: config.mode === 'manual' || config.mode === 'auto' ? config.totalDuration : 0,
       outputDir: OUTPUT_DIR,
       musicPath: music ? music.path : null,
       audioDir: AUDIO_DIR,

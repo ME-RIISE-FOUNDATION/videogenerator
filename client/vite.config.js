@@ -8,7 +8,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:5000',
+      // timeout/proxyTimeout = 0 → never cut off a slow request. Large video
+      // uploads can take minutes to stream through the dev proxy to :5000; the
+      // default proxy behavior can drop them mid-flight, surfacing in the app as
+      // a bare "Failed to fetch".
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+      },
       '/output': 'http://localhost:5000',
       '/socket.io': {
         target: 'http://localhost:5000',

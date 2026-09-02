@@ -25,8 +25,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
 import { probeMedia, listMusicTracks } from './videoProcessor.js';
 
 const OPENVERSE_API = 'https://api.openverse.org/v1/audio/';
@@ -211,12 +209,18 @@ async function downloadTrack(candidate, cacheDir) {
     signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     redirect: 'follow',
   });
-  if (!response.ok || !response.body) {
+  if (!response.ok) {
     throw new Error(`download returned HTTP ${response.status}`);
   }
 
+  // Buffer the whole track rather than streaming response.body through a
+  // pipeline: a paused (backpressured) undici body stream can throw an
+  // uncatchable `assert(!this.paused)` on abrupt socket end. arrayBuffer()
+  // reads without pausing, so a dropped connection rejects here (caught below)
+  // instead of crashing the process. Tracks are only a few MB — safe in memory.
   try {
-    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(partPath));
+    const bytes = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(partPath, bytes);
     fs.renameSync(partPath, finalPath);
   } catch (err) {
     try { fs.unlinkSync(partPath); } catch { /* already gone */ }

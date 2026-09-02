@@ -276,6 +276,81 @@ export function listMusicTracks(audioDir) {
     .map((f) => path.join(audioDir, f));
 }
 
+/** Floor any single item's on-screen time can be squeezed to (seconds). */
+const MIN_FIT_ITEM = 1.5;
+
+/**
+ * Pace the media items so the finished video lands on a user-chosen total
+ * length (Studio / Auto only). Mutates each item's `duration` (and a video's
+ * `trimStart`) in place.
+ *
+ * The target is the MEDIA length; a title slide is left at its fixed length and
+ * effectively added on top, so it is excluded from the fit here. Because each of
+ * the (M-1) transitions between media items overlaps `baseTransition` seconds,
+ * their durations must SUM to `target + baseTransition·(M-1)` to yield `target`
+ * after overlaps.
+ *
+ * Images are freely stretchable; videos can only shrink (middle-trimmed) toward
+ * a slot, never grow past their native length. So videos are sized first and any
+ * leftover budget is spread across the images — giving an EXACT hit for photo or
+ * mixed sets, and an honest undershoot (with a warning) only when every item is
+ * a video too short to fill the requested time.
+ *
+ * @param {Array<object>} items    Built item list (may include a 'title' item).
+ * @param {number} target          Desired media length in seconds.
+ * @param {number} baseTransition  Nominal xfade length used for the budget.
+ * @param {function(string):void} warn  Non-fatal warning sink.
+ */
+function fitItemsToTotalDuration(items, target, baseTransition, warn) {
+  const media = items.filter((it) => it.type !== 'title');
+  const M = media.length;
+  if (M === 0 || target <= 0) return;
+
+  const T = M > 1 ? baseTransition : 0;
+  let sumNeeded = target + T * (M - 1);
+
+  // Never let an item fall below the floor; if the target is too short for the
+  // clip count, raise it to the smallest length that fits and say so.
+  const minSum = MIN_FIT_ITEM * M;
+  if (sumNeeded < minSum) {
+    const achievable = minSum - T * (M - 1);
+    warn(
+      `Requested length is too short for ${M} clip${M > 1 ? 's' : ''} — using ` +
+      `${achievable.toFixed(1)}s (minimum ${MIN_FIT_ITEM}s per clip).`
+    );
+    sumNeeded = minSum;
+  }
+
+  const slot = sumNeeded / M;
+  const videos = media.filter((it) => it.type === 'video');
+  const flex = media.filter((it) => it.type !== 'video'); // images / gradients
+
+  let usedByVideos = 0;
+  for (const v of videos) {
+    const native = v.nativeDuration || v.duration;
+    const d = Math.min(native, Math.max(MIN_FIT_ITEM, slot));
+    v.trimStart = native > d ? (native - d) / 2 : 0;
+    v.duration = d;
+    usedByVideos += d;
+  }
+
+  if (flex.length > 0) {
+    // Images soak up whatever the (capped) videos didn't use → exact total.
+    const each = Math.max(MIN_FIT_ITEM, (sumNeeded - usedByVideos) / flex.length);
+    for (const f of flex) f.duration = each;
+  } else {
+    // All videos: if they can't fill the target we simply fall short — a clip
+    // can't be stretched without slow-mo. Tell the user rather than fake it.
+    const achieved = usedByVideos - T * (M - 1);
+    if (achieved < target - 0.5) {
+      warn(
+        `Your clips total about ${achieved.toFixed(1)}s — shorter than the ` +
+        `${Math.round(target)}s you asked for. Add more or longer clips to reach it.`
+      );
+    }
+  }
+}
+
 /**
  * Render one highlight-reel job.
  *
@@ -353,6 +428,7 @@ export async function processJob(options) {
     reduceBackgroundMusic = false,
     title = '',
     style = {},
+    totalDuration: targetTotalSeconds = 0,
     outputDir,
     musicPath: presetMusicPath = null,
     audioDir,
@@ -456,7 +532,7 @@ export async function processJob(options) {
           trimStart = (meta.duration - maxClipSeconds) / 2;
           duration = maxClipSeconds;
         }
-        items.push({ type: 'video', path: filePath, duration, trimStart, hasAudio: meta.hasAudio });
+        items.push({ type: 'video', path: filePath, duration, trimStart, nativeDuration: meta.duration, hasAudio: meta.hasAudio });
       } catch (err) {
         warn(`Skipped unreadable video "${path.basename(filePath)}" (${err.message})`);
       }
@@ -481,6 +557,15 @@ export async function processJob(options) {
       warn('No system font found — title slide will be blank black.');
     }
     items.unshift({ type: 'title', duration: TITLE_DURATION, hasAudio: false, fontFile, textFile });
+  }
+
+  // ------------------------------------------------ user-chosen total length
+  // Studio/Auto only: re-pace the media items to hit a requested total video
+  // length. Runs after the title slide is added (title stays fixed, added on
+  // top) and before the timeline math below, which then works off the new
+  // per-item durations exactly as usual.
+  if (targetTotalSeconds > 0) {
+    fitItemsToTotalDuration(items, targetTotalSeconds, baseTransition, warn);
   }
 
   // ------------------------------------------------------- timeline geometry
@@ -522,8 +607,16 @@ export async function processJob(options) {
         // Uploaded video clip — motion is native, no zoompan needed.
         command.input(item.videoPath);
       } else if (item.imagePath) {
-        // Single frame in — zoompan below animates it.
-        command.input(item.imagePath);
+        if (kenBurns) {
+          // Single frame in — zoompan below duplicates it into an animated clip.
+          command.input(item.imagePath);
+        } else {
+          // No zoompan for this scene (e.g. avatar/news mode): -loop 1 -t turns
+          // the still into an exactly-`duration`s stream. Without it a single
+          // image decodes to ONE frame, collapsing the scene — and the whole
+          // xfade chain — to a couple of frames against full-length audio.
+          command.input(item.imagePath).inputOptions(['-loop', '1', '-t', String(item.duration)]);
+        }
       } else {
         // Offline fallback: subtly animated dark gradient background.
         command

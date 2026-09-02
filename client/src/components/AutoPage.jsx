@@ -4,6 +4,7 @@ import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
 import VibePicker from './VibePicker.jsx';
 import ArtStylePicker from './ArtStylePicker.jsx';
+import DurationControl from './DurationControl.jsx';
 import useRenderJob from '../hooks/useRenderJob.js';
 
 /**
@@ -17,6 +18,7 @@ export default function AutoPage() {
   const [vibe, setVibe] = useState('dynamic');
   const [artStyle, setArtStyle] = useState('suggested');
   const [layout, setLayout] = useState('auto');
+  const [totalDuration, setTotalDuration] = useState('');
 
   const job = useRenderJob();
 
@@ -27,10 +29,11 @@ export default function AutoPage() {
     formData.append('vibe', vibe);
     formData.append('artStyle', artStyle);
     formData.append('autoLayout', layout);
+    formData.append('totalDuration', totalDuration);
     // Append order IS the edit order — chronology reads as intentional editing.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, vibe, artStyle, layout, job]);
+  }, [files, vibe, artStyle, layout, totalDuration, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -77,6 +80,13 @@ export default function AutoPage() {
             onChange={setArtStyle}
             disabled={job.busy}
             hint="Suggested keeps the vibe's own color grade; the other options override it (Photo = natural, no grade)."
+          />
+
+          <DurationControl
+            value={totalDuration}
+            onChange={setTotalDuration}
+            disabled={job.busy}
+            hint="Auto uses the vibe's own pacing. Pick a length to override it and fit your clips to that total."
           />
         </section>
 

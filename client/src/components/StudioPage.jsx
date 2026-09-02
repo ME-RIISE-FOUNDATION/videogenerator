@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import UploadQueue from './UploadQueue.jsx';
 import ConfigPanel from './ConfigPanel.jsx';
+import DurationControl from './DurationControl.jsx';
 import ArtStylePicker from './ArtStylePicker.jsx';
 import JobStatusPanels from './JobStatusPanels.jsx';
 import RecentVideos from './RecentVideos.jsx';
@@ -18,6 +19,7 @@ export default function StudioPage() {
   const [musicQuery, setMusicQuery] = useState('');
   const [title, setTitle] = useState('');
   const [artStyle, setArtStyle] = useState('suggested');
+  const [totalDuration, setTotalDuration] = useState('');
 
   const job = useRenderJob();
 
@@ -31,10 +33,11 @@ export default function StudioPage() {
     formData.append('musicQuery', musicQuery);
     formData.append('title', title);
     formData.append('artStyle', artStyle);
+    formData.append('totalDuration', totalDuration);
     // Append order IS the edit order — the server never re-sorts.
     files.forEach((item) => formData.append('files', item.file, item.file.name));
     job.submit(formData);
-  }, [files, layout, audioMode, reduceBackgroundMusic, musicQuery, title, artStyle, job]);
+  }, [files, layout, audioMode, reduceBackgroundMusic, musicQuery, title, artStyle, totalDuration, job]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -57,6 +60,13 @@ export default function StudioPage() {
           onTitleChange={setTitle}
           disabled={job.busy}
         />
+        <section className="glass-card mt-4">
+          <DurationControl
+            value={totalDuration}
+            onChange={setTotalDuration}
+            disabled={job.busy}
+          />
+        </section>
         <section className="glass-card mt-4">
           <ArtStylePicker
             value={artStyle}

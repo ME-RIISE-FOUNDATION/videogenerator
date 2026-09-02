@@ -16,8 +16,6 @@
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
 import { probeMedia } from './videoProcessor.js';
 
 const OPENVERSE_IMAGES_API = 'https://api.openverse.org/v1/images/';
@@ -270,8 +268,11 @@ export async function fetchSceneImage({ query, destDir, index, style = 'suggeste
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
       redirect: 'follow',
     });
-    if (!download.ok || !download.body) throw new Error(`download HTTP ${download.status}`);
-    await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(imagePath));
+    if (!download.ok) throw new Error(`download HTTP ${download.status}`);
+    // Buffer rather than stream response.body: a paused undici body stream can
+    // throw an uncatchable `assert(!this.paused)` on abrupt socket end and crash
+    // the server. arrayBuffer() reads without pausing, so failures reject here.
+    fs.writeFileSync(imagePath, Buffer.from(await download.arrayBuffer()));
 
     // ffprobe doubles as an "is this really an image" validator.
     const meta = await probeMedia(imagePath);
