@@ -10,8 +10,7 @@
  */
 export default function VideoPreview({ url, attribution, imageCredits, onStartOver }) {
   const fileName = url.split('/').pop();
-  // Ensure URL is absolute (handle both relative and absolute paths)
-  const videoUrl = url.startsWith('http') ? url : `http://localhost:5000${url}`;
+  const videoUrl = new URL(url, window.location.origin).toString();
   return (
     <section className="animate-fade-in-up rounded-2xl border border-emerald-500/25 bg-emerald-950/25 p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
       <div className="mb-3 flex items-center justify-between">
